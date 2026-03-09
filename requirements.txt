@@ -1,0 +1,30 @@
+# ── Data ──────────────────────────────────────────────────────────────────────
+lxml                  # fast XML streaming (iterparse for Posts.V1.3.xml)
+beautifulsoup4        # HTML parsing for post bodies
+httpx[http2]          # async HTTP for image downloads
+tqdm                  # progress bars
+
+# ── Retrieval ─────────────────────────────────────────────────────────────────
+torch                 # backbone for all encoders
+transformers          # HuggingFace CLIP (text + image encoder)
+faiss-cpu             # vector index (swap for faiss-gpu if available)
+Pillow                # image loading for CLIP vision encoder
+
+# torch-geometric (GNN for formula encoder) requires a version-matched install.
+# After installing torch, run:
+#   pip install torch-geometric
+#   pip install torch-scatter torch-sparse torch-cluster \
+#       -f https://data.pyg.org/whl/torch-{VERSION}+{CUDA}.html
+# See: https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html
+torch-geometric
+
+# ── Generation ────────────────────────────────────────────────────────────────
+openai                # LLM calls for generation eval
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+bert-score            # BERTScore for generation eval
+pytrec-eval-terrier   # TREC-style retrieval metrics (nDCG, MAP, etc.)
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+pydantic              # data schemas
+python-dotenv         # API key management

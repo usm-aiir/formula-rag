@@ -1,0 +1,64 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.installed.cfg
+MANIFEST
+pip-wheel-metadata/
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# ── Jupyter ────────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Data — raw, processed, benchmark (large / downloaded files) ───────────────
+data/raw/*
+data/processed/*
+data/benchmark/*
+
+# Keep directory scaffolding
+!data/raw/**/.gitkeep
+!data/processed/**/.gitkeep
+!data/benchmark/**/.gitkeep
+
+# ── Model checkpoints & FAISS indexes ─────────────────────────────────────────
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+*.faiss
+*.index
+
+# ── Logs & experiment outputs ─────────────────────────────────────────────────
+logs/
+runs/
+outputs/
+*.log
+wandb/
+mlruns/
+
+# ── OS / editor ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Testing & coverage ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
