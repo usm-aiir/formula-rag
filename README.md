@@ -1,38 +1,36 @@
-# Formula-Aware Multimodal RAG for Mathematics
+# formula-rag
 
-A multimodal RAG system for mathematics that treats **formulas as a first-class modality**, alongside text and images.
+Trimodal retrieval-augmented generation for mathematics, treating formulas as a first-class modality alongside text and images.
 
-## Overview
+## Setup
 
-Mathematical meaning is distributed across:
-- **Natural language** — explanations, definitions
-- **Symbolic expressions** — formulas with structure that matters
-- **Visual content** — diagrams, plots, screenshots
+```bash
+# 1. Download and extract the ARQMath dataset
+bash scripts/setup.sh
 
-This project explores whether retrieval and generation improve when formulas are modeled structurally (syntax trees, operator graphs) rather than as plain text.
+# 2. Download post images
+pip install -r requirements.txt
+python -m src.dataset.download_images <posts_jsonl> <images_dir>
+```
 
-## Project Structure
+See `docs/DATA_ACQUISITION.md` for full details.
 
-See [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md) for the full directory layout.
+## Dataset Pipeline
 
-## Dataset & Benchmark
+Run in order:
 
-See [`docs/DATASET_DESIGN.md`](docs/DATASET_DESIGN.md) for:
-- Data source (Math Stack Exchange)
-- Inclusion criteria
-- Multimodal post schema
-- Annotation layers
-- Benchmark tasks (retrieval, grounding, generation)
+```bash
+# Build formula index Parquet shards from TSV files (~30-60 min)
+python -m src.dataset.build_formula_index
 
-## Phases
+# Render formula images — typeset PNGs + function graphs (priority posts first)
+python -m src.dataset.render_formulas
+python -m src.dataset.render_formulas --all   # full corpus, background job
 
-1. Literature review and scope refinement
-2. Dataset collection and filtering
-3. Baseline retrieval pipeline
-4. Formula-aware retrieval module
-5. Multimodal fusion and generation
-6. Evaluation and analysis
+# Assemble trimodal dataset: text + formulas + images → sharded Parquet
+python -m src.dataset.assemble_dataset
 
-## License
-
-TBD
+# Export to HuggingFace datasets format
+python -m src.dataset.export_hf --output-dir data/hf_dataset
+python -m src.dataset.export_hf --push-to-hub your-username/arqmath-trimodal
+```

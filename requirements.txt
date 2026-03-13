@@ -1,30 +1,24 @@
-# ── Data ──────────────────────────────────────────────────────────────────────
-lxml                  # fast XML streaming (iterparse for Posts.V1.3.xml)
-beautifulsoup4        # HTML parsing for post bodies
-httpx[http2]          # async HTTP for image downloads
+# ── Data acquisition ──────────────────────────────────────────────────────────
+httpx[http2]          # async HTTP for post image downloads
 tqdm                  # progress bars
 
-# ── Retrieval ─────────────────────────────────────────────────────────────────
-torch                 # backbone for all encoders
-transformers          # HuggingFace CLIP (text + image encoder)
-faiss-cpu             # vector index (swap for faiss-gpu if available)
-Pillow                # image loading for CLIP vision encoder
+# ── Dataset pipeline ──────────────────────────────────────────────────────────
+pyarrow               # Parquet read/write (formula index + assembled dataset)
+polars                # lazy streaming joins (formula index → posts)
+datasets              # HuggingFace dataset export and Hub upload
 
-# torch-geometric (GNN for formula encoder) requires a version-matched install.
-# After installing torch, run:
-#   pip install torch-geometric
-#   pip install torch-scatter torch-sparse torch-cluster \
-#       -f https://data.pyg.org/whl/torch-{VERSION}+{CUDA}.html
-# See: https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html
-torch-geometric
+# ── Formula rendering ─────────────────────────────────────────────────────────
+matplotlib            # typeset PNG rendering via mathtext
+sympy                 # LaTeX parsing for function graph detection
+numpy                 # numeric evaluation for graph plots
 
-# ── Generation ────────────────────────────────────────────────────────────────
-openai                # LLM calls for generation eval
-
-# ── Evaluation ────────────────────────────────────────────────────────────────
-bert-score            # BERTScore for generation eval
-pytrec-eval-terrier   # TREC-style retrieval metrics (nDCG, MAP, etc.)
-
-# ── Utilities ─────────────────────────────────────────────────────────────────
-pydantic              # data schemas
-python-dotenv         # API key management
+# ── Retrieval — Stage 1 (GNN formula encoder) ─────────────────────────────────
+# Install PyTorch and PyG BEFORE the packages below.  For PyTorch 2.1.2 + CUDA 12.1:
+#   pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121
+#   pip install torch_geometric
+#   pip install torch_scatter torch_sparse torch_cluster \
+#       -f https://data.pyg.org/whl/torch-2.1.2+cu121.html
+pyyaml                # config loading
+rank-bm25             # offline BM25 hard-negative mining
+faiss-gpu             # GPU-accelerated nearest-neighbour index (A100s)
+pytrec-eval           # official IR metrics (nDCG, MAP) via trec_eval bindings

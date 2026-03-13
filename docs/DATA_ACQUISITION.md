@@ -20,15 +20,15 @@ This project uses all three ARQMath tasks, each with a distinct role:
 
 ---
 
-## Step 1: Download ARQMath
+## Step 1: Download and Extract ARQMath
 
-Run the provided download script from the project root:
+Run the setup script from the project root:
 
 ```bash
-bash scripts/download_arqmath.sh
+bash scripts/setup.sh
 ```
 
-This downloads ~2.8 GB of compressed data (~7 GB uncompressed) to `data/raw/arqmath/`.
+This downloads ~2.8 GB of compressed data (~7 GB uncompressed) to `data/raw/arqmath/` and then extracts each zip in place. The script is idempotent — files that already exist are not re-downloaded, and archives that have already been extracted are not re-extracted.
 
 ### Optional flags
 
@@ -36,13 +36,19 @@ The formula indexes are large. If you want to start quickly without the structur
 
 ```bash
 # Skip Operator Trees (saves 587 MB) and Symbol Layout Trees (saves 835 MB)
-bash scripts/download_arqmath.sh --no-opt --no-slt
+bash scripts/setup.sh --no-opt --no-slt
 
 # Skip only SLT (saves 835 MB)
-bash scripts/download_arqmath.sh --no-slt
+bash scripts/setup.sh --no-slt
 ```
 
-You can always re-run the script later to add them; files that already exist are skipped.
+To download without extracting (e.g. to inspect zip contents first):
+
+```bash
+bash scripts/setup.sh --no-unzip
+```
+
+You can always re-run the script later to add skipped files.
 
 ---
 
@@ -57,14 +63,7 @@ You can always re-run the script later to add them; files that already exist are
 | `Tags.V1.3.xml` | 169 KB | Tag vocabulary with counts. Useful for filtering by topic (e.g., `calculus`, `geometry`). |
 | `README_DATA.md` | — | Official ARQMath data documentation. |
 
-After download, unzip the corpus:
-
-```bash
-cd data/raw/arqmath/collection
-unzip Posts.V1.3.zip
-```
-
-`Posts.V1.3.xml` will be ~4.1 GB uncompressed. It contains both questions (`PostTypeId=1`) and answers (`PostTypeId=2`) in a flat XML structure. Key fields:
+`setup.sh` extracts `Posts.V1.3.zip` automatically. `Posts.V1.3.xml` will be ~4.1 GB uncompressed. It contains both questions (`PostTypeId=1`) and answers (`PostTypeId=2`) in a flat XML structure. Key fields:
 
 - `Id` — unique post ID
 - `PostTypeId` — 1=question, 2=answer
@@ -82,14 +81,7 @@ unzip Posts.V1.3.zip
 | `slt_representation_v3.zip` | 835 MB | Symbol Layout Tree representation (Presentation MathML-based). Captures visual appearance. |
 | `README_formulas_V3.0.md` | — | Documentation for all formula indexes. |
 
-After download, unzip the formula indexes you need:
-
-```bash
-cd data/raw/arqmath/formulas
-unzip latex_representation_v3.zip
-unzip opt_representation_v3.zip   # optional
-unzip slt_representation_v3.zip   # optional
-```
+`setup.sh` extracts the formula indexes automatically alongside the downloads. Use `--no-opt` / `--no-slt` to skip the large optional ones.
 
 **Which representation to use when:**
 - **LaTeX** — Baseline; use for text-as-formula models or as a fallback.

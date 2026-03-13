@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# download_arqmath.sh
+# setup.sh
 #
-# Downloads the ARQMath dataset (v1.3) from the official RIT backup server:
-#   https://www.cs.rit.edu/~dprl/ARQMath-backup/
+# Downloads and unzips the ARQMath dataset (v1.3) from the official RIT backup
+# server: https://www.cs.rit.edu/~dprl/ARQMath-backup/
 #
 # ARQMath Task Selection
 # ──────────────────────
@@ -24,18 +24,22 @@
 #     Given a question, return a single generated answer. Used as the end-to-end
 #     RAG pipeline evaluation.
 #
-# What gets downloaded (≈2.8 GB compressed, ≈7 GB unpacked):
+# What gets downloaded and unzipped (≈2.8 GB compressed, ≈7 GB unpacked):
 #
 #   data/raw/arqmath/
 #     collection/
 #       Posts.V1.3.zip            (895 MB) — main MSE corpus (2010–2018)
+#       Posts.V1.3.xml            (~4.1 GB unzipped)
 #       PostLinks.V1.3.xml         (29 MB) — related/duplicate post links
 #       Tags.V1.3.xml             (169 KB) — tag vocabulary
 #       README_DATA.md
 #     formulas/
 #       latex_representation_v3.zip  (406 MB) — LaTeX formula index
+#       latex_representation_v3/     (unzipped)
 #       opt_representation_v3.zip    (587 MB) — Operator Trees (formula encoder training)
+#       opt_representation_v3/       (unzipped)
 #       slt_representation_v3.zip    (835 MB) — Symbol Layout Trees (formula encoder training)
+#       slt_representation_v3/       (unzipped)
 #       README_formulas_V3.0.md
 #     topics/
 #       task1/
@@ -67,12 +71,14 @@
 #       arqmath3/de_duplicate_2022.py
 #
 # Usage:
-#   bash scripts/download_arqmath.sh [--no-opt] [--no-slt]
+#   bash scripts/setup.sh [--no-opt] [--no-slt] [--no-unzip]
 #
-#   --no-opt   Skip the Operator Tree formula index (saves 587 MB)
-#   --no-slt   Skip the Symbol Layout Tree formula index (saves 835 MB)
+#   --no-opt     Skip the Operator Tree formula index (saves 587 MB)
+#   --no-slt     Skip the Symbol Layout Tree formula index (saves 835 MB)
+#   --no-unzip   Download only; skip extraction of zip files
 #
-# The script is idempotent: files that already exist are not re-downloaded.
+# The script is idempotent: files that already exist are not re-downloaded,
+# and archives that have already been extracted are not re-extracted.
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -80,14 +86,16 @@ set -euo pipefail
 # ─── Parse flags ─────────────────────────────────────────────────────────────
 DOWNLOAD_OPT=true
 DOWNLOAD_SLT=true
+DO_UNZIP=true
 
 for arg in "$@"; do
   case "$arg" in
-    --no-opt) DOWNLOAD_OPT=false ;;
-    --no-slt) DOWNLOAD_SLT=false ;;
+    --no-opt)   DOWNLOAD_OPT=false ;;
+    --no-slt)   DOWNLOAD_SLT=false ;;
+    --no-unzip) DO_UNZIP=false ;;
     *)
       echo "Unknown argument: $arg"
-      echo "Usage: $0 [--no-opt] [--no-slt]"
+      echo "Usage: $0 [--no-opt] [--no-slt] [--no-unzip]"
       exit 1
       ;;
   esac
@@ -122,6 +130,22 @@ download() {
          --retry 3 --retry-delay 5 \
          --output "$dest" \
          "$url"
+  fi
+}
+
+# Uses a sentinel file (<zip>.unzipped) to skip re-extraction on subsequent runs.
+unzip_archive() {
+  local zip="$1"
+  local dest_dir="$2"
+  local marker="${zip%.zip}.unzipped"
+  if [[ -f "$marker" ]]; then
+    echo "  [skip] $(basename "$zip") already extracted"
+  elif [[ ! -f "$zip" ]]; then
+    echo "  [skip] $(basename "$zip") not found, skipping extraction"
+  else
+    echo "  [unzip] $(basename "$zip")"
+    unzip -q "$zip" -d "$dest_dir"
+    touch "$marker"
   fi
 }
 
@@ -170,6 +194,12 @@ download \
   "$BASE/Collection/Posts.V1.3.zip" \
   "$COLLECTION_DIR/Posts.V1.3.zip"
 
+if [[ "$DO_UNZIP" == "true" ]]; then
+  echo ""
+  echo "  [note] Posts.V1.3.xml unpacks to ~4.1 GB. Starting extraction..."
+  unzip_archive "$COLLECTION_DIR/Posts.V1.3.zip" "$COLLECTION_DIR"
+fi
+
 # ─── Formulas ─────────────────────────────────────────────────────────────────
 banner "Formula indexes"
 download \
@@ -182,12 +212,19 @@ download \
   "$BASE/Formulas/latex_representation_v3.zip" \
   "$FORMULAS_DIR/latex_representation_v3.zip"
 
+if [[ "$DO_UNZIP" == "true" ]]; then
+  unzip_archive "$FORMULAS_DIR/latex_representation_v3.zip" "$FORMULAS_DIR"
+fi
+
 if [[ "$DOWNLOAD_OPT" == "true" ]]; then
   echo ""
   echo "  [note] opt_representation_v3.zip is 587 MB. Starting download..."
   download \
     "$BASE/Formulas/opt_representation_v3.zip" \
     "$FORMULAS_DIR/opt_representation_v3.zip"
+  if [[ "$DO_UNZIP" == "true" ]]; then
+    unzip_archive "$FORMULAS_DIR/opt_representation_v3.zip" "$FORMULAS_DIR"
+  fi
 else
   echo "  [skip] opt_representation_v3.zip (--no-opt)"
 fi
@@ -198,6 +235,9 @@ if [[ "$DOWNLOAD_SLT" == "true" ]]; then
   download \
     "$BASE/Formulas/slt_representation_v3.zip" \
     "$FORMULAS_DIR/slt_representation_v3.zip"
+  if [[ "$DO_UNZIP" == "true" ]]; then
+    unzip_archive "$FORMULAS_DIR/slt_representation_v3.zip" "$FORMULAS_DIR"
+  fi
 else
   echo "  [skip] slt_representation_v3.zip (--no-slt)"
 fi
@@ -307,17 +347,5 @@ echo ""
 echo "Downloaded to: $DATA_DIR"
 echo ""
 echo "Next steps:"
-echo "  1. Unzip the corpus:"
-echo "     cd $COLLECTION_DIR && unzip Posts.V1.3.zip"
-echo ""
-echo "  2. Unzip the formula index(es):"
-echo "     cd $FORMULAS_DIR && unzip latex_representation_v3.zip"
-if [[ "$DOWNLOAD_OPT" == "true" ]]; then
-  echo "     cd $FORMULAS_DIR && unzip opt_representation_v3.zip"
-fi
-if [[ "$DOWNLOAD_SLT" == "true" ]]; then
-  echo "     cd $FORMULAS_DIR && unzip slt_representation_v3.zip"
-fi
-echo ""
-echo "  3. See docs/DATA_ACQUISITION.md for what to do next."
+echo "  See docs/DATA_ACQUISITION.md for what to do next."
 echo ""
