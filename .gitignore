@@ -1,4 +1,3 @@
-# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -12,28 +11,23 @@ build/
 MANIFEST
 pip-wheel-metadata/
 
-# ── Virtual environments ───────────────────────────────────────────────────────
 .venv/
 venv/
 env/
 ENV/
 .env
 
-# ── Jupyter ────────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# ── Data — raw, processed, benchmark (large / downloaded files) ───────────────
 data/raw/*
 data/processed/*
 data/benchmark/*
 
-# Keep directory scaffolding
 !data/raw/**/.gitkeep
 !data/processed/**/.gitkeep
 !data/benchmark/**/.gitkeep
 
-# ── Model checkpoints & FAISS indexes ─────────────────────────────────────────
 checkpoints/
 *.pt
 *.bin
@@ -41,7 +35,6 @@ checkpoints/
 *.faiss
 *.index
 
-# ── Logs & experiment outputs ─────────────────────────────────────────────────
 logs/
 runs/
 outputs/
@@ -49,7 +42,6 @@ outputs/
 wandb/
 mlruns/
 
-# ── OS / editor ────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 .idea/
@@ -57,10 +49,12 @@ Thumbs.db
 *.swp
 *.swo
 
-# ── Testing & coverage ─────────────────────────────────────────────────────────
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
 
 results/
+tri-search/arq1thru3-finetuned-all-mpnet-jul-27
+tri-search/data/clip_index/metadata.json
+tri-search/MathImages
