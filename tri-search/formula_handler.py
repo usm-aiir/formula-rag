@@ -33,7 +33,6 @@ from formula_utils import latex_to_mathml, trim_math_delimiters
 
 logger = logging.getLogger(__name__)
 
-
 def _candidate_roots() -> List[Path]:
     roots: List[Path] = []
     seen: set[Path] = set()
@@ -43,7 +42,6 @@ def _candidate_roots() -> List[Path]:
                 seen.add(root)
                 roots.append(root)
     return roots
-
 
 @dataclass(frozen=True)
 class TangentCFTConfig:
@@ -73,8 +71,6 @@ class FormulaHandler:
             self._mapping_connection = None
 
     def retrieve_similar_formulas(self, top_k: int = 10) -> List[dict]:
-        if top_k <= 0:
-            return []
 
         all_results: List[dict] = []
         for formula_index, curr_formula in enumerate(self.formulas, start=1):

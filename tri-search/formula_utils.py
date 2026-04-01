@@ -57,6 +57,7 @@ def extract_formulas(text: str) -> List[str]:
             r"[a-zA-Z]\^[\d{]", r"[a-zA-Z]_[\d{]", r"\\frac\{", r"\\sqrt[\[{]",
             r"\\sum\b", r"\\int\b", r"[+\-*/=<>≤≥≠]",
         ]
+        # Edit min formula length here!!!
         if any(re.search(p, candidate) for p in math_indicators) and len(candidate) > 1:
             extracted.append(candidate)
 

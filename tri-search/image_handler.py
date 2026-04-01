@@ -1,3 +1,4 @@
+# python image_handler.py --search "your query here" --k 10
 import json
 from pathlib import Path
 from typing import Union
@@ -16,7 +17,6 @@ META_FILE  = INDEX_DIR / "metadata.json"
 EMBEDDING_DIM = 512
 
 
-#  load CLIP once, reuse everywhere
 _model      = None
 _preprocess = None
 
@@ -25,6 +25,7 @@ def _get_clip():
     global _model, _preprocess
     if _model is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        # returns the model, a tokenizer, and preprocess function. we dont need the tokenizer right now
         _model, _, _preprocess = open_clip.create_model_and_transforms(
             "ViT-B-32", pretrained="openai", device=device
         )
@@ -38,7 +39,7 @@ def encode_image(image_path: Union[str, Path]) -> np.ndarray:
     """
     model, preprocess = _get_clip()
     device = next(model.parameters()).device
-
+    # gets the image to the right size and format for CLIP, and moves it to the same device as the model
     image = preprocess(Image.open(image_path).convert("RGB")).unsqueeze(0).to(device)
 
     with torch.no_grad():
@@ -65,6 +66,7 @@ def encode_text(query: str) -> np.ndarray:
     with torch.no_grad():
         vector = model.encode_text(tokens)
 
+    # L2-normalise so that dot-product == cosine similarity
     vector = vector / vector.norm(dim=-1, keepdim=True)
 
     return vector.cpu().numpy().astype(np.float32)
@@ -96,7 +98,7 @@ def build_index(limit: Union[int, None] = None) -> None:
             print(f"[skip] {entry.image_id}: {e}")
             continue
 
-        index.add(vector)                               # add the row to FAISS
+        index.add(vector)
         metadata.append({
             "image_id": entry.image_id,
             "source":   entry.source,
@@ -105,6 +107,7 @@ def build_index(limit: Union[int, None] = None) -> None:
             "file_path": str(entry.image_path),
         })
 
+        # Nice progress update
         if (i + 1) % 500 == 0:
             print(f"  encoded {i + 1} images so far ")
 
@@ -112,8 +115,8 @@ def build_index(limit: Union[int, None] = None) -> None:
     META_FILE.write_text(json.dumps(metadata, indent=2))
 
     print(f"\nDone. Indexed {index.ntotal} images.")
-    print(f"  index  → {INDEX_FILE}")
-    print(f"  metadata → {META_FILE}")
+    print(f"  index  - {INDEX_FILE}")
+    print(f"  metadata - {META_FILE}")
 
 
 def search(query: Union[str, Path], k: int = 5) -> list:
@@ -195,7 +198,7 @@ if __name__ == "__main__":
         else:
             hits = search(args.search, k=args.k)
             for hit in hits:
-                print(f"  [{hit['rank']}] score={hit['score']:.3f}  {hit['image_id']}  {hit['title'][:60]}  path={hit.get('file_path', 'N/A')}")
+                print(f"  [{hit['rank']}] score={hit['score']:.3f}  {hit['image_id']}  {hit['title'][:60]}  path= {hit.get('file_path', 'N/A')}")
 
     if not args.build and not args.search:
         parser.print_help()

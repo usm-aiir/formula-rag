@@ -17,32 +17,16 @@ from schemas.TextRetrievalResult import TextRetrievalResult
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 logger = logging.getLogger(__name__)
 
-# todo: this should be a global constant in a shared config module, but for now it's only used here so it's defined locally
-DEFAULT_MATHMEX_INDICES: List[str] = [
-    "mathmex_arxiv",
-    "mathmex_math-overflow",
-    "mathmex_math-stack-exchange",
-    "mathmex_mathematica",
-    "mathmex_wikipedia",
-    "mathmex_youtube",
-    "mathmex_proof-wiki",
-    "mathmex_wikimedia",
-]
-
-
 class TextHandler:
 
     def __init__(self) -> None:
         self.model_path = os.path.join(os.path.dirname(__file__), "arq1thru3-finetuned-all-mpnet-jul-27")
         self.indices: List[str] = [
-            "mathmex_arxiv",
             "mathmex_math-overflow",
             "mathmex_math-stack-exchange",
             "mathmex_mathematica",
             "mathmex_wikipedia",
             "mathmex_youtube",
-            "mathmex_proof-wiki",
-            "mathmex_wikimedia",
         ]
         self._text_model: Optional[SentenceTransformer] = None
         self._opensearch_client: Optional[OpenSearch] = None
