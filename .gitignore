@@ -33,13 +33,15 @@ data/benchmark/*
 !data/processed/**/.gitkeep
 !data/benchmark/**/.gitkeep
 
-# ── Model checkpoints & FAISS indexes ─────────────────────────────────────────
+# ── Model checkpoints, FAISS indexes & eval caches ──────────────────────────
 checkpoints/
 *.pt
 *.bin
 *.safetensors
 *.faiss
 *.index
+*_eval.json
+*_eval_quick.json
 
 # ── Logs & experiment outputs ─────────────────────────────────────────────────
 logs/

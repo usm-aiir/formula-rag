@@ -3,7 +3,7 @@ Task 2 evaluation: formula-to-formula retrieval on ARQMath-3 (Year 3).
 
 Pipeline
 --------
-1. Encode all *judged* corpus formulas with the GNN → FAISS index.
+1. Encode the full formula corpus (all unique old_visual_ids in the formula index).
 2. For each topic query (Year 3), encode the query formula.
 3. Retrieve top-1000 by cosine similarity (inner product on L2-normalised vecs).
 4. Score with pytrec_eval using the Year-3 official qrels.
@@ -11,16 +11,14 @@ Pipeline
 
 Usage
 -----
-    python -m src.stage1.eval \
-        --checkpoint checkpoints/gnn_stage1/best.pt \
-        [--top-k 1000] \
-        [--batch-size 512] \
-        [--device cuda]
+    python -m src.task3.eval --checkpoint checkpoints/task3/best.pt
+    python -m src.task3.eval --checkpoint checkpoints/task3/best.pt --quick-run
 """
 
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -37,12 +35,14 @@ from tqdm import tqdm
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.stage1.dataset import load_qrels, load_topics
+from src.task3.dataset import load_qrels, load_topics
 from src.data.formula_graph import opt_to_pyg
-from src.stage1.model.formula_encoder import FormulaEncoder
+from src.task3.model.formula_encoder import FormulaEncoder
 
 _FORMULA_INDEX_DIR = _PROJECT_ROOT / "data/processed/formula_index"
 _EVAL_SPLIT = "eval"
+_QUICK_RUN_CORPUS_SIZE = 100_000
+_QUICK_RUN_SEED = 42
 
 
 # ---------------------------------------------------------------------------
@@ -53,10 +53,11 @@ def _encode_corpus(
     encoder: FormulaEncoder,
     device: torch.device,
     batch_size: int = 512,
-    judged_ids: Optional[set] = None,
+    quick_run: bool = False,
 ) -> Tuple[np.ndarray, List[str]]:
     """
-    Encode all judged corpus formulas (old_visual_id → first non-null OPT).
+    Encode the full formula corpus (one entry per unique old_visual_id).
+    When quick_run=True, reservoir-sample _QUICK_RUN_CORPUS_SIZE formulas.
 
     Returns
     -------
@@ -68,18 +69,21 @@ def _encode_corpus(
         raise FileNotFoundError(f"No formula index shards in {_FORMULA_INDEX_DIR}")
 
     seen: set = set()
-    corpus: List[Tuple[str, str]] = []
+    all_entries: List[Tuple[str, str]] = []
 
     for shard in tqdm(shards, desc="Loading corpus OPTs"):
         table = pq.read_table(shard, columns=["old_visual_id", "opt"])
-        for ovid, opt in zip(table["old_visual_id"].to_pylist(),
-                              table["opt"].to_pylist()):
+        for ovid, opt in zip(table["old_visual_id"].to_pylist(), table["opt"].to_pylist()):
             if ovid and opt and ovid not in seen:
-                if judged_ids is None or ovid in judged_ids:
-                    corpus.append((ovid, opt))
-                    seen.add(ovid)
+                all_entries.append((ovid, opt))
+                seen.add(ovid)
 
-    print(f"Corpus size: {len(corpus):,} unique formulas", flush=True)
+    if quick_run:
+        rng = random.Random(_QUICK_RUN_SEED)
+        if len(all_entries) > _QUICK_RUN_CORPUS_SIZE:
+            all_entries = rng.sample(all_entries, _QUICK_RUN_CORPUS_SIZE)
+
+    print(f"Corpus size: {len(all_entries):,} unique formulas", flush=True)
 
     id_list: List[str] = []
     all_embs: List[np.ndarray] = []
@@ -92,17 +96,17 @@ def _encode_corpus(
         if not batch_opts:
             return
         graphs = [opt_to_pyg(o) for o in batch_opts]
-        valid_graphs = [g for g in graphs if g is not None]
-        valid_ids = [bid for g, bid in zip(graphs, batch_ids) if g is not None]
-        if not valid_graphs:
+        valid = [(g, bid) for g, bid in zip(graphs, batch_ids) if g is not None]
+        if not valid:
             return
-        pyg_batch = Batch.from_data_list(valid_graphs).to(device)
+        valid_graphs, valid_ids = zip(*valid)
+        pyg_batch = Batch.from_data_list(list(valid_graphs)).to(device)
         with torch.no_grad():
             embs = encoder(pyg_batch, normalize=True)
         all_embs.append(embs.cpu().float().numpy())
         id_list.extend(valid_ids)
 
-    for ovid, opt in tqdm(corpus, desc="Encoding corpus"):
+    for ovid, opt in tqdm(all_entries, desc="Encoding corpus"):
         batch_ids.append(ovid)
         batch_opts.append(opt)
         if len(batch_opts) >= batch_size:
@@ -189,20 +193,25 @@ def evaluate(
     checkpoint_path: str,
     top_k: int = 1000,
     batch_size: int = 512,
+    quick_run: bool = False,
     device_str: str = "cuda",
 ):
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}", flush=True)
 
+    if quick_run:
+        print(
+            f"[quick-run] Sampling {_QUICK_RUN_CORPUS_SIZE:,} formulas "
+            f"(seed={_QUICK_RUN_SEED}). Metrics are approximate.",
+            flush=True,
+        )
+
     encoder = FormulaEncoder.load(checkpoint_path, map_location=device).to(device)
     encoder.eval()
 
     qrels_eval = load_qrels(_EVAL_SPLIT)
-    judged_ids = {cid for cands in qrels_eval.values() for cid in cands}
 
-    corpus_embs, corpus_ids = _encode_corpus(
-        encoder, device, batch_size=batch_size, judged_ids=judged_ids
-    )
+    corpus_embs, corpus_ids = _encode_corpus(encoder, device, batch_size=batch_size, quick_run=quick_run)
 
     print("Building FAISS index …", flush=True)
     faiss_index = _build_faiss_index(corpus_embs)
@@ -210,7 +219,7 @@ def evaluate(
     query_embs = _encode_queries(encoder, device)
 
     run: Dict[str, Dict[str, float]] = {
-        topic: {doc_id: score for doc_id, score in _retrieve(faiss_index, corpus_ids, emb, top_k)}
+        topic: dict(_retrieve(faiss_index, corpus_ids, emb, top_k))
         for topic, emb in query_embs.items()
         if emb is not None
     }
@@ -235,8 +244,9 @@ def evaluate(
             metrics_agg[metric] += value
     metrics_agg = {k: v / n for k, v in metrics_agg.items()}
 
+    label = "Task 2 Evaluation (quick-run — approximate)" if quick_run else "Task 2 Evaluation"
     print(f"\n{'='*50}")
-    print(f"Task 2 Evaluation — {n} topics")
+    print(f"{label} — {n} topics")
     print(f"{'='*50}")
     for k in [10, 100, 1000]:
         ndcg_key = f"ndcg_cut_{k}"
@@ -259,10 +269,18 @@ def main():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default=str(_PROJECT_ROOT / "checkpoints/gnn_stage1/best.pt"),
+        default=str(_PROJECT_ROOT / "checkpoints/task3/best.pt"),
     )
     parser.add_argument("--top-k", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument(
+        "--quick-run",
+        action="store_true",
+        help=(
+            f"Randomly sample {_QUICK_RUN_CORPUS_SIZE:,} corpus formulas for a fast "
+            "approximate run. Do not use for reporting results."
+        ),
+    )
     parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
 
@@ -270,6 +288,7 @@ def main():
         checkpoint_path=args.checkpoint,
         top_k=args.top_k,
         batch_size=args.batch_size,
+        quick_run=args.quick_run,
         device_str=args.device,
     )
 

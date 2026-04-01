@@ -2,23 +2,22 @@
 Task 2 dataset: formula-to-formula retrieval.
 
 Loads ARQMath Task 2 qrels (Years 1 & 2 for training, Year 3 for eval) and
-builds (query_opt, positive_opt, [negative_opt, ...]) triplets for InfoNCE.
+builds (query_opt, positive_opt) pairs for contrastive training with in-batch
+negatives.
 
 Formula lookup pipeline:
   - Candidate formulas: keyed by old_visual_id in the formula index.
   - Query formulas: extracted from topic XML by LaTeX match in the index.
-  - Hard negatives: loaded from a pre-mined JSON file (see mine_negatives.py).
 
 The index is loaded lazily and cached for the lifetime of the process.
 """
 
 from __future__ import annotations
 
-import json
 import random
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import pyarrow.parquet as pq
 import torch
@@ -54,7 +53,6 @@ _TOPIC_PATHS: Dict[str, List[Path]] = {
     ],
 }
 
-# Relevance threshold: grades ≥ this value are treated as positives
 POSITIVE_GRADE = 2.0
 
 # ---------------------------------------------------------------------------
@@ -115,7 +113,7 @@ def _latex_to_opt(latex: str) -> Optional[str]:
 def load_topics(split: str) -> Dict[str, str]:
     """
     Parse topic XML files for the given split.
-    Returns {topic_number: latex_string}, e.g. {"B.1": "f(x)= \\frac{...}"}
+    Returns {topic_number: latex_string}.
     """
     topics: Dict[str, str] = {}
     for path in _TOPIC_PATHS[split]:
@@ -157,35 +155,21 @@ class FormulaRetrievalDataset(Dataset):
     """
     Each item is a dict with:
         query_graph : PyG Data   (query formula)
-        pos_graph   : PyG Data   (a positive candidate, grade ≥ POSITIVE_GRADE)
-        neg_graphs  : List[Data] (hard negatives pre-mined by BM25; may be empty)
+        pos_graph   : PyG Data   (a positive candidate, grade >= POSITIVE_GRADE)
         topic       : str        (for tracking / debugging)
 
     Pairs where the query or positive cannot be converted to a graph (null OPT,
     malformed XML) are silently skipped during __init__.
     """
 
-    def __init__(
-        self,
-        split: str = "train",
-        negatives_path: Optional[str] = None,
-        num_hard_negatives: int = 4,
-        seed: int = 42,
-    ):
+    def __init__(self, split: str = "train", seed: int = 42):
         if split not in ("train", "eval"):
             raise ValueError(f"split must be 'train' or 'eval', got {split!r}")
 
-        self.num_hard_negatives = num_hard_negatives
         rng = random.Random(seed)
-
         opt_index = load_opt_index()
         topics = load_topics(split)
         qrels = load_qrels(split)
-
-        hard_neg_map: Dict[str, List[str]] = {}
-        if negatives_path and Path(negatives_path).exists():
-            with open(negatives_path) as f:
-                hard_neg_map = json.load(f)
 
         self.items: List[dict] = []
 
@@ -200,8 +184,6 @@ class FormulaRetrievalDataset(Dataset):
                 continue
 
             pos_ids = [cid for cid, g in qrels[topic].items() if g >= POSITIVE_GRADE]
-            bm25_neg_ids = hard_neg_map.get(topic, [])
-
             if not pos_ids:
                 continue
 
@@ -212,27 +194,9 @@ class FormulaRetrievalDataset(Dataset):
                 if pos_graph is None:
                     continue
 
-                neg_pool = [n for n in bm25_neg_ids if n != pos_id]
-                if len(neg_pool) < num_hard_negatives:
-                    grade0 = [
-                        cid for cid, g in qrels[topic].items()
-                        if g < 1 and cid != pos_id
-                    ]
-                    neg_pool = neg_pool + grade0
-
-                rng.shuffle(neg_pool)
-                neg_graphs: List[Data] = []
-                for nid in neg_pool:
-                    if len(neg_graphs) >= num_hard_negatives:
-                        break
-                    ng = opt_to_pyg(opt_index.get(nid)) if opt_index.get(nid) else None
-                    if ng is not None:
-                        neg_graphs.append(ng)
-
                 self.items.append({
                     "query_graph": query_graph,
                     "pos_graph": pos_graph,
-                    "neg_graphs": neg_graphs,
                     "topic": topic,
                 })
 
@@ -256,21 +220,11 @@ def collate_fn(batch: List[dict]) -> dict:
     Returns a dict with:
         query_batch : PyG Batch
         pos_batch   : PyG Batch
-        neg_batch   : PyG Batch | None  (None if no negatives in this batch)
-        neg_counts  : LongTensor[B]     how many negatives each query has
     """
     query_graphs = [item["query_graph"] for item in batch]
     pos_graphs = [item["pos_graph"] for item in batch]
 
-    all_neg_graphs: List[Data] = []
-    neg_counts: List[int] = []
-    for item in batch:
-        neg_counts.append(len(item["neg_graphs"]))
-        all_neg_graphs.extend(item["neg_graphs"])
-
     return {
         "query_batch": Batch.from_data_list(query_graphs),
         "pos_batch": Batch.from_data_list(pos_graphs),
-        "neg_batch": Batch.from_data_list(all_neg_graphs) if all_neg_graphs else None,
-        "neg_counts": torch.tensor(neg_counts, dtype=torch.long),
     }

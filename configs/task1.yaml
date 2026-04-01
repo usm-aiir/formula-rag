@@ -1,0 +1,19 @@
+# Task 1: MathBERTa text encoder baseline (ARQMath Answer Retrieval)
+#
+# GradCache training: InfoNCE sees all `batch_size` pairs (255 negatives)
+# while only `mini_batch_size` items sit in GPU memory at once.
+
+model:
+  model_name: witiko/mathberta
+  max_length: 256
+
+training:
+  batch_size: 256           # effective batch → 255 in-batch negatives
+  mini_batch_size: 32       # micro-batch that fits in GPU memory
+  epochs: 20
+  lr: 5.0e-5
+  warmup_steps: 100
+  temperature: 0.07
+  early_stopping_patience: 5
+  checkpoint_dir: checkpoints/task1
+  include_task2: false

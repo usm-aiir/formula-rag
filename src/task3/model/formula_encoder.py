@@ -19,7 +19,7 @@ import torch.nn as nn
 from torch_geometric.data import Batch
 
 from src.data.formula_graph import opt_to_pyg
-from src.stage1.model.gnn import GATFormulaEncoder
+from src.task3.model.gnn import GATFormulaEncoder
 
 
 class FormulaEncoder(nn.Module):
@@ -32,7 +32,7 @@ class FormulaEncoder(nn.Module):
         Parameters
         ----------
         cfg : dict
-            Corresponds to the ``model`` section of gnn_stage1.yaml.
+            Corresponds to the ``model`` section of task3.yaml.
         """
         super().__init__()
         self.cfg = cfg
