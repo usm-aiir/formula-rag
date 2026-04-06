@@ -1,11 +1,9 @@
 """
-Train GNN formula encoder on ARQMath Task 2 (Formula Retrieval, Years 1 & 2).
+Train GNN formula encoder on ARQMath Task 2 (Formula Retrieval).
+Phase 2: Self-Adversarial Hard Negative Fine-Tuning.
 
-Loss: symmetric InfoNCE (NT-Xent) with in-batch negatives.
+Loss: InfoNCE (NT-Xent) with in-batch negatives AND explicit hard negatives.
 Temperature is a learnable scalar (log-parameterised for stability).
-
-Auto-detects GPU count — spawns DDP workers for multi-GPU, runs directly
-on a single GPU or CPU with no overhead.
 
 Usage:
   python -m src.task3.train --config configs/task3.yaml
@@ -31,7 +29,8 @@ from tqdm import tqdm
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from src.task3.dataset import FormulaRetrievalDataset, collate_fn
+# NEW: Import the Phase 2 Dataset
+from src.task3.dataset import FormulaRetrievalDataset, Phase2Dataset, collate_fn
 from src.task3.model.formula_encoder import FormulaEncoder
 
 
@@ -41,7 +40,7 @@ from src.task3.model.formula_encoder import FormulaEncoder
 
 class InfoNCELoss(nn.Module):
     """
-    Symmetric InfoNCE (NT-Xent) with in-batch negatives and learnable temperature.
+    InfoNCE (NT-Xent) with in-batch negatives + explicit hard negatives.
     """
 
     def __init__(self, init_temperature: float = 0.07):
@@ -52,11 +51,31 @@ class InfoNCELoss(nn.Module):
     def temperature(self) -> float:
         return self.log_tau.exp().item()
 
-    def forward(self, q_emb: torch.Tensor, p_emb: torch.Tensor) -> torch.Tensor:
+    def forward(self, q_emb: torch.Tensor, p_emb: torch.Tensor, hn_emb: torch.Tensor = None) -> torch.Tensor:
         tau = self.log_tau.exp().clamp(min=1e-4, max=1.0)
-        sim = (q_emb @ p_emb.T) / tau
         labels = torch.arange(q_emb.size(0), device=q_emb.device)
-        return (F.cross_entropy(sim, labels) + F.cross_entropy(sim.T, labels)) / 2
+
+        if hn_emb is None:
+            # Standard In-Batch Negatives (Used during Eval)
+            sim = (q_emb @ p_emb.T) / tau
+            return (F.cross_entropy(sim, labels) + F.cross_entropy(sim.T, labels)) / 2
+        else:
+            # Explicit Hard Negatives
+            # Concatenate Positives and Hard Negatives into a single pool (Size: 2N x D)
+            keys = torch.cat([p_emb, hn_emb], dim=0) 
+            
+            # Query similarity against ALL keys
+            sim = (q_emb @ keys.T) / tau 
+            
+            # The true label is still the index of the Positive (0 to N-1)
+            # This pushes the Query away from in-batch negatives AND the Hard Negative (index i + N)
+            loss_q = F.cross_entropy(sim, labels)
+
+            # Keep the symmetric positive-to-query constraint for stability
+            sim_p = (p_emb @ q_emb.T) / tau
+            loss_p = F.cross_entropy(sim_p, labels)
+
+            return (loss_q + loss_p) / 2
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +101,8 @@ def _worker(rank: int, world_size: int, cfg: dict):
     # --- datasets & loaders --------------------------------------------------
     train_cfg = cfg["training"]
 
-    train_ds = FormulaRetrievalDataset(split="train", seed=train_cfg.get("seed", 42))
+    train_ds = Phase2Dataset(_PROJECT_ROOT / "data/processed/self_mined_hard_negatives.jsonl")
+    
     eval_ds = FormulaRetrievalDataset(split="eval", seed=0)
 
     train_sampler = (
@@ -110,7 +130,19 @@ def _worker(rank: int, world_size: int, cfg: dict):
     )
 
     # --- model ---------------------------------------------------------------
-    encoder = FormulaEncoder(cfg["model"]).to(device)
+    ckpt_dir = Path(train_cfg.get("checkpoint_dir", "checkpoints/task3"))
+    phase1_ckpt = ckpt_dir / "best.pt"
+    
+    # Load Phase 1 weights so we don't start from scratch
+    if phase1_ckpt.exists():
+        if is_main:
+            print(f"Loading Phase 1 weights from {phase1_ckpt}", flush=True)
+        encoder = FormulaEncoder.load(str(phase1_ckpt), map_location=device).to(device)
+    else:
+        if is_main:
+            print("WARNING: Phase 1 weights not found, starting from scratch!", flush=True)
+        encoder = FormulaEncoder(cfg["model"]).to(device)
+        
     loss_fn = InfoNCELoss(init_temperature=train_cfg.get("temperature_init", 0.07)).to(device)
 
     if use_ddp:
@@ -118,6 +150,8 @@ def _worker(rank: int, world_size: int, cfg: dict):
 
     # --- optimiser & scheduler -----------------------------------------------
     params = list(encoder.parameters()) + list(loss_fn.parameters())
+    
+    # For fine-tuning, might want to use a slightly lower LR, but OneCycleLR handles this well
     optimiser = torch.optim.AdamW(
         params,
         lr=float(train_cfg["lr"]),
@@ -137,8 +171,6 @@ def _worker(rank: int, world_size: int, cfg: dict):
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
     amp_dtype = torch.bfloat16 if (use_amp and torch.cuda.is_bf16_supported()) else torch.float16
 
-    # --- checkpoint dir ------------------------------------------------------
-    ckpt_dir = Path(train_cfg.get("checkpoint_dir", "checkpoints/task3"))
     if is_main:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -162,12 +194,17 @@ def _worker(rank: int, world_size: int, cfg: dict):
         for batch in loop:
             q_batch = batch["query_batch"].to(device)
             p_batch = batch["pos_batch"].to(device)
+            
+            # NEW: Safely extract hard negative batch if it exists
+            hn_batch = batch.get("hard_neg_batch")
 
             with torch.cuda.amp.autocast(dtype=amp_dtype, enabled=use_amp):
                 model = encoder.module if use_ddp else encoder
                 q_emb = model(q_batch, normalize=True)
                 p_emb = model(p_batch, normalize=True)
-                loss = loss_fn(q_emb, p_emb)
+                hn_emb = model(hn_batch.to(device), normalize=True) if hn_batch is not None else None
+                
+                loss = loss_fn(q_emb, p_emb, hn_emb)
 
             optimiser.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -192,12 +229,16 @@ def _worker(rank: int, world_size: int, cfg: dict):
             for batch in eval_loader:
                 q_batch = batch["query_batch"].to(device)
                 p_batch = batch["pos_batch"].to(device)
+                # Eval sets don't have hard negatives
+                hn_batch = batch.get("hard_neg_batch")
 
                 with torch.cuda.amp.autocast(dtype=amp_dtype, enabled=use_amp):
                     model = encoder.module if use_ddp else encoder
                     q_emb = model(q_batch, normalize=True)
                     p_emb = model(p_batch, normalize=True)
-                    loss = loss_fn(q_emb, p_emb)
+                    hn_emb = model(hn_batch.to(device), normalize=True) if hn_batch is not None else None
+                    
+                    loss = loss_fn(q_emb, p_emb, hn_emb)
 
                 val_loss += loss.item()
                 val_batches += 1
@@ -223,8 +264,10 @@ def _worker(rank: int, world_size: int, cfg: dict):
                 best_val_loss = avg_val_loss
                 patience_counter = 0
                 stop_flag.fill_(0)
+                
+                # Save as phase2 so we don't overwrite the baseline
                 raw_model.save(
-                    ckpt_dir / "best.pt",
+                    ckpt_dir / "phase2_best.pt",
                     extra={"epoch": epoch, "val_loss": avg_val_loss},
                 )
                 print(f"  → saved best checkpoint (val_loss={best_val_loss:.4f})", flush=True)
@@ -235,7 +278,7 @@ def _worker(rank: int, world_size: int, cfg: dict):
                     stop_flag.fill_(1)
 
             raw_model.save(
-                ckpt_dir / "latest.pt",
+                ckpt_dir / "phase2_latest.pt",
                 extra={"epoch": epoch, "val_loss": avg_val_loss},
             )
 

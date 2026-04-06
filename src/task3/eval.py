@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -121,6 +122,23 @@ def _encode_corpus(
 # Query encoding
 # ---------------------------------------------------------------------------
 
+def normalize_latex(s: str) -> str:
+    """Safe normalization: whitespace, sizing, and basic synonyms only."""
+    if not s:
+        return ""
+    s = re.sub(r'\s+', '', s)
+    s = s.replace(r'\left', '').replace(r'\right', '')
+    synonyms = {
+        r'\leq': r'\le', 
+        r'\geq': r'\ge', 
+        r'\rightarrow': r'\to', 
+        r'\gets': r'\leftarrow', 
+        r'\ne': r'\neq'
+    }
+    for old, new in synonyms.items():
+        s = s.replace(old, new)
+    return s
+
 def _encode_queries(
     encoder: FormulaEncoder,
     device: torch.device,
@@ -129,20 +147,32 @@ def _encode_queries(
     topics = load_topics(_EVAL_SPLIT)
     shards = sorted(_FORMULA_INDEX_DIR.glob("*.parquet"))
 
-    def _latex_to_opt(latex: str) -> Optional[str]:
-        latex_strip = latex.strip()
-        for shard in shards:
-            table = pq.read_table(shard, columns=["latex", "opt"])
-            for lat, opt in zip(table["latex"].to_pylist(), table["opt"].to_pylist()):
-                if lat and lat.strip() == latex_strip and opt:
-                    return opt
-        return None
+    unique_queries = {latex.strip() for latex in topics.values()}
+    norm_to_orig = {normalize_latex(q): q for q in unique_queries}
+    normalized_query_set = set(norm_to_orig.keys())
+    
+    query_opt_map = {}
+    print(f"Scanning shards for {len(unique_queries)} normalized queries...", flush=True)
+    
+    for shard in shards:
+        # Early exit if we found them all
+        if len(query_opt_map) == len(unique_queries):
+            break 
+            
+        table = pq.read_table(shard, columns=["latex", "opt"])
+        for lat, opt in zip(table["latex"].to_pylist(), table["opt"].to_pylist()):
+            if lat:
+                norm_lat = normalize_latex(lat)
+                if norm_lat in normalized_query_set and opt:
+                    orig_query = norm_to_orig[norm_lat]
+                    if orig_query not in query_opt_map:
+                        query_opt_map[orig_query] = opt
 
     query_embs: Dict[str, Optional[np.ndarray]] = {}
     encoder.eval()
 
     for topic, latex in tqdm(topics.items(), desc="Encoding queries"):
-        opt = _latex_to_opt(latex)
+        opt = query_opt_map.get(latex.strip())
         if opt is None:
             query_embs[topic] = None
             continue
@@ -232,7 +262,7 @@ def evaluate(
 
     evaluator = pytrec_eval.RelevanceEvaluator(
         qrels_int,
-        {"ndcg_cut", "map_cut"},
+        {"ndcg_cut", "map_cut", "P"}, # ARQMath-style prime metrics
         relevance_level=2,
     )
     results = evaluator.evaluate(run)
@@ -244,17 +274,20 @@ def evaluate(
             metrics_agg[metric] += value
     metrics_agg = {k: v / n for k, v in metrics_agg.items()}
 
-    label = "Task 2 Evaluation (quick-run — approximate)" if quick_run else "Task 2 Evaluation"
+    label = "Task 3 Evaluation (quick-run — approximate)" if quick_run else "Task 3 Evaluation"
     print(f"\n{'='*50}")
     print(f"{label} — {n} topics")
     print(f"{'='*50}")
-    for k in [10, 100, 1000]:
+    for k in [5, 10, 100, 1000]:
         ndcg_key = f"ndcg_cut_{k}"
         map_key = f"map_cut_{k}"
+        p_key = f"P_{k}"
         if ndcg_key in metrics_agg:
             print(f"  nDCG@{k:<5} {metrics_agg[ndcg_key]:.4f}")
         if map_key in metrics_agg:
             print(f"  MAP@{k:<6} {metrics_agg[map_key]:.4f}")
+        if p_key in metrics_agg:
+            print(f"  P@{k:<6} {metrics_agg[p_key]:.4f}")
     print(f"{'='*50}\n")
 
     return metrics_agg
