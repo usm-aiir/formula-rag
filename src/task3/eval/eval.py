@@ -1,5 +1,6 @@
 """
-Task 2 evaluation: formula-to-formula retrieval on ARQMath-3 (Year 3).
+ARQMath Task 2 evaluation: formula-to-formula retrieval on ARQMath-3 (Year 3).
+NOTE: This eval script was designed for the Phase 2 OPT-based encoder. For the dual-encoder, use src/task3/eval_dual.py instead.
 
 Pipeline
 --------
@@ -261,10 +262,10 @@ def evaluate(
     }
 
     evaluator = pytrec_eval.RelevanceEvaluator(
-        qrels_int,
-        {"ndcg_cut", "map_cut", "P"}, # ARQMath-style prime metrics
-        relevance_level=2,
-    )
+            qrels_int,
+            {"ndcg_cut", "map_cut", "P", "bpref"}, # Added Precision and bpref
+            relevance_level=2,
+        )
     results = evaluator.evaluate(run)
 
     metrics_agg: Dict[str, float] = defaultdict(float)
@@ -278,16 +279,27 @@ def evaluate(
     print(f"\n{'='*50}")
     print(f"{label} — {n} topics")
     print(f"{'='*50}")
+    
+    # bpref is calculated over the entire retrieved list, so it has no @k cutoff
+    if "bpref" in metrics_agg:
+        print(f"  bpref      {metrics_agg['bpref']:.4f}")
+        print(f"{'-'*30}")
+
     for k in [5, 10, 100, 1000]:
         ndcg_key = f"ndcg_cut_{k}"
         map_key = f"map_cut_{k}"
         p_key = f"P_{k}"
+        
         if ndcg_key in metrics_agg:
             print(f"  nDCG@{k:<5} {metrics_agg[ndcg_key]:.4f}")
         if map_key in metrics_agg:
             print(f"  MAP@{k:<6} {metrics_agg[map_key]:.4f}")
         if p_key in metrics_agg:
-            print(f"  P@{k:<6} {metrics_agg[p_key]:.4f}")
+            print(f"  P@{k:<8} {metrics_agg[p_key]:.4f}")
+        
+        if k != 1000:
+            print(f"{'-'*30}")
+            
     print(f"{'='*50}\n")
 
     return metrics_agg

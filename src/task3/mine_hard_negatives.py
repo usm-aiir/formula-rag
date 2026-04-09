@@ -1,5 +1,5 @@
 """
-Phase 2: Self-Adversarial Hard Negative Mining.
+Self-Adversarial Hard Negative Mining.
 
 Uses the trained Phase 1 GAT encoder to search the 8.3M corpus using the
 TRAINING topics. High-ranking incorrect results are saved as hard negatives.
