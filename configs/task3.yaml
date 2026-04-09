@@ -4,11 +4,15 @@
 # Uses symmetric InfoNCE with in-batch negatives and learnable temperature.
 
 model:
+  opt_vocab_size: 81
+  slt_vocab_size: 27
   node_emb_dim: 64
   hidden_dim: 128
   num_heads: 4
   num_layers: 4
-  output_dim: 256
+  branch_output_dim: 256 # What each GNN outputs
+  num_fusion_heads: 4    # No. of parallel interviews for cross
+  final_output_dim: 256  # What the Fusion MLP outputs to FAISS
   dropout: 0.1
 
 training:

@@ -25,7 +25,7 @@ import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Batch, Data
 
-from src.data.formula_graph import opt_to_pyg
+from src.data.formula_graph import opt_to_pyg, slt_to_pyg
 
 # ---------------------------------------------------------------------------
 # Paths (resolved relative to project root)
@@ -327,21 +327,6 @@ class Phase2Dataset(Dataset):
 # Collate function for DataLoader
 # ---------------------------------------------------------------------------
 
-# def collate_fn(batch: List[dict]) -> dict:
-#     """
-#     Collates a list of items into batched PyG graphs.
-
-#     Returns a dict with:
-#         query_batch : PyG Batch
-#         pos_batch   : PyG Batch
-#     """
-#     query_graphs = [item["query_graph"] for item in batch]
-#     pos_graphs = [item["pos_graph"] for item in batch]
-
-#     return {
-#         "query_batch": Batch.from_data_list(query_graphs),
-#         "pos_batch": Batch.from_data_list(pos_graphs),
-#     }
 def collate_fn(batch: List[dict]) -> dict:
     """
     Collates a list of items into batched PyG graphs.
@@ -361,3 +346,90 @@ def collate_fn(batch: List[dict]) -> dict:
         collated["hard_neg_batch"] = Batch.from_data_list(hn_graphs)
 
     return collated
+
+import random
+from src.data.formula_graph import batch_opt_to_pyg, batch_slt_to_pyg
+
+# =========================================================================
+# PHASE 3: Dual-Modality Dataset
+# =========================================================================
+
+class Phase3Dataset(torch.utils.data.Dataset):
+    """
+    Reads the dual-modality JSONL.
+    Yields (query_opt, query_slt, pos_opt, pos_slt, hn_opt, hn_slt).
+    """
+    def __init__(self, jsonl_path: Union[str, Path], allowed_topics: set = None):
+        import json
+        self.data = []
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                item = json.loads(line)
+                # If a filter is provided, only keep allowed topics
+                if allowed_topics is None or item["topic_id"] in allowed_topics:
+                    self.data.append(item)
+                
+    def __len__(self) -> int:
+        return len(self.data)
+        
+    def __getitem__(self, idx: int) -> dict:
+        item = self.data[idx]
+        
+        # Randomly select ONE hard negative from the list for this epoch
+        import random
+        hn_idx = random.randint(0, len(item["hard_neg_opts"]) - 1)
+        
+        return {
+            "q_opt": item["query_opt"],
+            "q_slt": item["query_slt"],
+            "p_opt": item["pos_opt"],
+            "p_slt": item["pos_slt"],
+            "hn_opt": item["hard_neg_opts"][hn_idx],
+            "hn_slt": item["hard_neg_slts"][hn_idx],
+        }
+
+def dual_collate_fn(batch: list[dict]) -> dict:
+    """
+    Converts raw XML strings into batched PyG Data objects for BOTH modalities.
+    Drops any triplets where the PyG parser fails on either branch, guaranteeing
+    identical batch sizes for Late Fusion.
+    """
+    final_q_opt, final_q_slt = [], []
+    final_p_opt, final_p_slt = [], []
+    final_hn_opt, final_hn_slt = [], []
+    
+    for item in batch:
+        # Parse all 6 graphs individually
+        q_o = opt_to_pyg(item["q_opt"])
+        q_s = slt_to_pyg(item["q_slt"])
+        
+        p_o = opt_to_pyg(item["p_opt"])
+        p_s = slt_to_pyg(item["p_slt"])
+        
+        hn_o = opt_to_pyg(item["hn_opt"])
+        hn_s = slt_to_pyg(item["hn_slt"])
+        
+        # Atomic check: If ALL 6 parsed successfully, append them
+        if all([q_o, q_s, p_o, p_s, hn_o, hn_s]):
+            final_q_opt.append(q_o)
+            final_q_slt.append(q_s)
+            
+            final_p_opt.append(p_o)
+            final_p_slt.append(p_s)
+            
+            final_hn_opt.append(hn_o)
+            final_hn_slt.append(hn_s)
+
+    # If the whole batch was somehow corrupted, return empty
+    if not final_q_opt:
+        return {}
+
+    from torch_geometric.data import Batch
+    return {
+        "q_opt_batch": Batch.from_data_list(final_q_opt),
+        "q_slt_batch": Batch.from_data_list(final_q_slt),
+        "p_opt_batch": Batch.from_data_list(final_p_opt),
+        "p_slt_batch": Batch.from_data_list(final_p_slt),
+        "hn_opt_batch": Batch.from_data_list(final_hn_opt),
+        "hn_slt_batch": Batch.from_data_list(final_hn_slt),
+    }
