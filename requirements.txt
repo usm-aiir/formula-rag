@@ -13,6 +13,19 @@ safetensors           # model weight serialisation
 #   pip install torch_scatter torch_sparse torch_cluster \
 #       -f https://data.pyg.org/whl/torch-2.1.2+cu121.html
 pyyaml                # config loading
+bm25s==0.3.3
+faiss_gpu==1.7.2
+fastapi==0.135.3
+latex2mathml==3.79.0
+numpy==1.24.4
+pandas==2.0.3
+pydantic==2.12.5
+safetensors==0.7.0
+streamlit==1.32.0
+streamlit==1.40.1
+transformers==4.46.3
+uvicorn==0.44.0
+
 
 # ── Evaluation ────────────────────────────────────────────────────────────
 faiss-gpu             # GPU-accelerated nearest-neighbour retrieval
