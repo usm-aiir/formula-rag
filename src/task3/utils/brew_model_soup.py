@@ -8,7 +8,7 @@ into a single "Super Model" to maximize accuracy without increasing inference co
 import torch
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 def create_model_soup():
     ckpt_dir = _PROJECT_ROOT / "checkpoints/task3/phase3_fusion"

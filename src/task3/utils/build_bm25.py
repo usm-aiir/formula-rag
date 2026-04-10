@@ -15,7 +15,7 @@ from pathlib import Path
 from tqdm import tqdm
 from typing import List
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 _PARQUET_DIR = _PROJECT_ROOT / "data/processed/formula_index"

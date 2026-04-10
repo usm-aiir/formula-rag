@@ -1,0 +1,62 @@
+             FORMULA RAG: COMPLETE RETRIEVAL & RE-RANKING PIPELINE
+
+                              [ User Query ]
+                  (Parsed into OPT & SLT XML Representations)
+                                    │
+                                    ▼
++==============================================================================+
+|                           HYBRID SEARCH (eval_hybrid.py)                     |
+|                     (The "Wide Net" Top-1000 Filter)                         |
++==============================================================================+
+|                                   |                                          |
+|      --- DENSE RETRIEVAL ---      |        --- SPARSE RETRIEVAL ---          |
+|                                   |                                          |
+|  1. PyG Graph Conversion          |  1. Token Extraction                     |
+|     (opt_to_pyg, slt_to_pyg)      |     (regex XML tag stripping)            |
+|               ↓                   |                  ↓                       |
+|  2. DualFormulaEncoder (GNN)      |  2. BM25s Index Search                   |
+|     Cross-Attention Forward Pass  |     Keyword/Symbol Matching              |
+|               ↓                   |                  ↓                       |
+|  3. FAISS Vector Search           |  3. BM25 Scoring                         |
+|     (Inner Product, k=1000)       |     (k=1000)                             |
+|               ↓                   |                  ↓                       |
+|         [ Dense Scores ]          |           [ Sparse Scores ]              |
+|               │                   |                  │                       |
+|               +--------→ [ Min-Max Normalization ] ←-+                       |
+|                                   │                                          |
+|                                   ▼                                          |
+|                 [ Alpha Fusion: 80% Dense / 20% Sparse ]                     |
++==============================================================================+
+                                    │
+                                    ▼
+                     [ Top-1000 Candidate Formula IDs ]
+                                    │
+                                    ▼
++==============================================================================+
+|           STRUCTURAL RE-RANKER ( phase_4_structural_reranker.py ).           |
+|                                                                              |
++==============================================================================+
+|                                                                              |
+|  1. Target XML Extraction                                                    |
+|     (Loads OPT & SLT strings for query and the 1,000 candidates)             |
+|                                   ↓                                          |
+|  2. Deterministic Canonicalization (Tree Sorting)                            |
+|     (Alphabetical & shape-based sorting of commutative operators)            |
+|                                   ↓                                          |
+|  3. Multi-Level DFS Path Extraction (Max Depth = 4)                          |
+|     ├─ Exact (E::)     → Appended TWICE (Double Weighting)                   |
+|     ├─ Alpha (A::)     → Variable alignment (V_1, V_2)                       |
+|     └─ Universal (U::) → Wildcard matching (V, N)                            |
+|                                   ↓                                          |
+|  4. Subtree Coverage Scoring                                                 |
+|     ├─ Local Document IDF calculation                                        |
+|     ├─ Overlap sum: min(Q_count, D_count) * IDF * (Depth^1.5)                |
+|     └─ Soft Length Penalty: (Q_len / max(1, D_len))^0.25                     |
+|                                   ↓                                          |
+|  5. Asymmetrical Reciprocal Rank Fusion (RRF)                                |
+|     (Dense Rank / K=60)  +  [(Structural Rank / K=15) * 3.0]                 |
++==============================================================================+
+                                    │
+                                    ▼
+                      [    Final Sorted Results      ]
+                  (Standard P@10: 0.4887 | Filtered P'@10: 0.6310)

@@ -34,7 +34,7 @@ import torch
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.task3.dataset import load_qrels, load_topics

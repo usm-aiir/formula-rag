@@ -1,0 +1,41 @@
+                      [ User Query ]
+                  (e.g., "\int x^2 dx")
+                            │
+                            ▼
+           +---------------------------------+
+           |      Graph Parser Engine        |
+           +---------------------------------+
+               /                         \
+        [ OPT Graph ]               [ SLT Graph ]
+       (Semantic Logic)           (Visual Layout)
+              │                          │
+              ▼                          ▼
+      +---------------+          +---------------+
+      |   OPT GNN     |          |   SLT GNN     |  <-- 4-Layer Graph Attention (GAT)
+      |  (256-dim)    |          |  (256-dim)    |      Passes messages along edges
+      +---------------+          +---------------+
+              │                          │
+              +------------+   +---------+
+                           │   │
+                           ▼   ▼
+               +-----------------------+
+               | Bi-Directional        |  <-- The "Interview" Phase. 
+               | Cross-Attention Layer |      Visual & Logic brains exchange context.
+               +-----------------------+
+                           │
+                           ▼
+               +-----------------------+
+               |     Fusion MLP &      |  <-- Smashes the vectors together and forces
+               |    L2 Normalization   |      the length to exactly 1.0.
+               +-----------------------+
+                           │
+             [ 256-Dimensional Query Vector ]
+                           │
+                           ▼
+               +-----------------------+  <-- OFFLINE: 22.9 Million Corpus Vectors
+               |      FAISS Index      |      mapped onto a 256-d hypersphere.
+               | (Inner Product Search)|
+               +-----------------------+
+                           │
+                           ▼
+             [ Top-K Retrieved Formulas ]

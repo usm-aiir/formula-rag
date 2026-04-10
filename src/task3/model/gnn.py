@@ -97,9 +97,6 @@ class GATFormulaEncoder(nn.Module):
             nn.Linear(pooled_dim, output_dim),
         )
 
-        # NEW: Project raw 512-dim node embeddings to the expected output_dim (256)
-        self.node_proj = nn.Linear(in_dim, output_dim)
-
         self._init_weights()
 
     def _init_weights(self):
@@ -109,11 +106,6 @@ class GATFormulaEncoder(nn.Module):
                 nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
-                    
-        # Initialize the new node projection layer
-        nn.init.xavier_uniform_(self.node_proj.weight)
-        if self.node_proj.bias is not None:
-            nn.init.zeros_(self.node_proj.bias)
 
     def forward(self, batch: Batch, normalize: bool = True, output_nodes: bool = False) -> torch.Tensor:
         """
@@ -140,12 +132,8 @@ class GATFormulaEncoder(nn.Module):
             x = F.dropout(x, p=self.dropout, training=self.training)
             x = ln(x + residual, batch_vec)
 
-        # Apply projection mapping from 512 to 256 for individual nodes
         if output_nodes:
-            x_nodes = self.node_proj(x)
-            if normalize:
-                x_nodes = F.normalize(x_nodes, p=2, dim=-1)
-            return x_nodes
+            return x
 
         x_pool = torch.cat([global_mean_pool(x, batch_vec),
                              global_max_pool(x, batch_vec)], dim=-1)
