@@ -1,4 +1,5 @@
 import ranx
+# {'precision@5': 0.37241379310344824, 'ndcg@5': 0.21019198059968947}
 
 RUN_PATH = "./data/clip_results.tsv"
 

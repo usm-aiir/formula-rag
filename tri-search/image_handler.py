@@ -10,7 +10,6 @@ import faiss
 import numpy as np
 import torch
 from PIL import Image
-
 from dataset_handler import iter_dataset
 
 INDEX_DIR  = Path(__file__).parent / "data" / "clip_index"
@@ -23,7 +22,6 @@ EMBEDDING_DIM = 512
 CLIP_CHECKPOINT: Union[Path, None] = (
     Path(__file__).parent / "checkpoints" / "clip_finetune" / "best.pt"
 )
-
 
 _model      = None
 _preprocess = None
@@ -63,7 +61,6 @@ def encode_image(image_path: Union[str, Path]) -> np.ndarray:
     vector = vector / vector.norm(dim=-1, keepdim=True)
 
     return vector.cpu().numpy().astype(np.float32)
-
 
 def encode_text(query: str) -> np.ndarray:
     """
@@ -132,7 +129,6 @@ def build_index(limit: Union[int, None] = None) -> None:
     print(f"  index  - {INDEX_FILE}")
     print(f"  metadata - {META_FILE}")
 
-
 def search(query: Union[str, Path], k: int = 5) -> list:
     """
     Find the k most similar images to a query.
@@ -168,8 +164,13 @@ def search(query: Union[str, Path], k: int = 5) -> list:
     return results
 
 # look into using liberies to extract text from images for the rag model
-def extract_text_from_image() -> str:
-    pass
+# def extract_text_from_image(file_path: str) -> str:
+
+#     # Open the PNG image
+#     img = Image.open(file_path)
+#     # Extract text
+#     text = pytesseract.image_to_string(img)
+#     return(text)
 
 if __name__ == "__main__":
     import argparse
@@ -204,9 +205,9 @@ if __name__ == "__main__":
             print(f"Index already exists at {INDEX_FILE}. Use --force to rebuild.")
         else:
             if args.force and INDEX_FILE.exists():
-                print("Forcing rebuild of existing index …\n")
+                print("Forcing rebuild of existing index")
             else:
-                print("Building full index …\n")
+                print("Building full index")
             build_index()
 
     if args.search:
@@ -216,6 +217,8 @@ if __name__ == "__main__":
             hits = search(args.search, k=args.k)
             for hit in hits:
                 print(f"  [{hit['rank']}] score={hit['score']:.3f}  {hit['image_id']}  {hit['title'][:60]}  path= {hit.get('file_path', 'N/A')}")
+                # print(f" Image Text: {extract_text_from_image(hit.get('file_path', 'N/A'))}")
 
     if not args.build and not args.search:
         parser.print_help()
+    

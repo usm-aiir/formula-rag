@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument("--model-name", default="ViT-B-32")
   parser.add_argument("--pretrained", default="openai")
-  parser.add_argument("--batch-size", type=int, default=32)
+  parser.add_argument("--batch-size", type=int, default=16)
   parser.add_argument("--epochs", type=int, default=5)
   parser.add_argument("--lr", type=float, default=1e-5)
   parser.add_argument("--weight-decay", type=float, default=0.2)
@@ -199,7 +199,6 @@ def build_collate_fn(tokenizer: Callable) -> Callable:
 
   return collate_fn
 
-
 def clip_loss(
   image_features: torch.Tensor,
   text_features: torch.Tensor,
@@ -235,7 +234,6 @@ def save_checkpoint(
   }
   torch.save(payload, checkpoint_path)
 
-
 def load_checkpoint(
   checkpoint_path: Path,
   model: nn.Module,
@@ -250,7 +248,6 @@ def load_checkpoint(
   best_val_loss = checkpoint.get("best_val_loss")
   return start_epoch, best_val_loss
 
-
 # load the CLIP model and preprocess function, ensuring that the model is in evaluation mode and moved to the correct device, 
 # and that the preprocess function is compatible with the model's expected input size and normalization.
 def get_autocast(device: torch.device):
@@ -261,15 +258,15 @@ def get_autocast(device: torch.device):
 # train one epoch, iterating over the dataloader, computing the loss, and updating the model parameters if in training mode. 
 # Log the average loss every 2 steps, and handle cases where all batches are skipped due to insufficient samples.
 def run_epoch(
-    model: nn.Module,           # The neural network model to train or evaluate (e.g., a CLIP model)
-    dataloader: DataLoader,     # PyTorch DataLoader providing batches of (images, texts) (e.g., train_loader)
+    model: nn.Module, # The neural network model to train or evaluate (e.g., a CLIP model)
+    dataloader: DataLoader, # PyTorch DataLoader providing batches of (images, texts) (e.g., train_loader)
     optimizer: Optional[optim.Optimizer], # Optimizer for updating model parameters (e.g., Adam). None if evaluating.
-    scaler: GradScaler,         # Gradient scaler for mixed precision training (e.g., GradScaler("cuda"))
-    loss_img: nn.Module,        # Loss function for image branch (e.g., nn.CrossEntropyLoss())
-    loss_txt: nn.Module,        # Loss function for text branch (e.g., nn.CrossEntropyLoss())
-    device: torch.device,       # Device to run computations on (e.g., torch.device("cuda") or torch.device("cpu"))
-    epoch: int,                 # Current epoch number (e.g., 0 for first epoch)
-    phase: str,                 # Phase indicator (e.g., "train" or "val")
+    scaler: GradScaler, # Gradient scaler for mixed precision training (e.g., GradScaler("cuda"))
+    loss_img: nn.Module, # Loss function for image branch (e.g., nn.CrossEntropyLoss())
+    loss_txt: nn.Module, # Loss function for text branch (e.g., nn.CrossEntropyLoss())
+    device: torch.device, # Device to run computations on (e.g., torch.device("cuda") or torch.device("cpu"))
+    epoch: int, # Current epoch number (e.g., 0 for first epoch)
+    phase: str, # Phase indicator (e.g., "train" or "val")
 ) -> float:
   is_training = optimizer is not None
   model.train(is_training)
