@@ -1,3 +1,5 @@
+# image handler defaults to fine tuned model
+# python image_handler.py --build --force
 # python image_handler.py --search "your query here" --k 10
 import json
 from pathlib import Path
@@ -16,6 +18,12 @@ INDEX_FILE = INDEX_DIR / "mathimages.index"
 META_FILE  = INDEX_DIR / "metadata.json"     
 EMBEDDING_DIM = 512
 
+# Path to a fine-tuned checkpoint produced by fine_tune_clip.py.
+# Set to None to use the base OpenAI weights.
+CLIP_CHECKPOINT: Union[Path, None] = (
+    Path(__file__).parent / "checkpoints" / "clip_finetune" / "best.pt"
+)
+
 
 _model      = None
 _preprocess = None
@@ -29,6 +37,12 @@ def _get_clip():
         _model, _, _preprocess = open_clip.create_model_and_transforms(
             "ViT-B-32", pretrained="openai", device=device
         )
+        if CLIP_CHECKPOINT is not None and CLIP_CHECKPOINT.exists():
+            checkpoint = torch.load(CLIP_CHECKPOINT, map_location=device)
+            _model.load_state_dict(checkpoint["model_state_dict"])
+            print(f"[clip] loaded fine-tuned weights from {CLIP_CHECKPOINT}")
+        else:
+            print("[clip] using base OpenAI weights")
         _model.eval()
     return _model, _preprocess
 
@@ -153,6 +167,9 @@ def search(query: Union[str, Path], k: int = 5) -> list:
 
     return results
 
+# look into using liberies to extract text from images for the rag model
+def extract_text_from_image() -> str:
+    pass
 
 if __name__ == "__main__":
     import argparse

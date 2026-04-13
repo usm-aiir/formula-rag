@@ -13,7 +13,6 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
-
 import open_clip
 import torch
 from PIL import Image
@@ -39,6 +38,8 @@ class MathImageEntry:
   image_path: Path
 
 
+# Handles the dataset for fine-tuning CLIP, providing a PyTorch Dataset that loads images and 
+# their corresponding text descriptions
 class MathImagesClipDataset(Dataset):
   def __init__(self, entries: Sequence[MathImageEntry], preprocess: Callable):
     self.entries = list(entries)
@@ -46,7 +47,8 @@ class MathImagesClipDataset(Dataset):
 
   def __len__(self) -> int:
     return len(self.entries)
-
+  # given an index, return the corresponding image and text as tensors. If the image cannot be read, 
+  # return None and log a warning. The text is taken from the title, or if the title is empty, from the image_id.
   def __getitem__(self, index: int) -> Optional[Tuple[torch.Tensor, str]]:
     entry = self.entries[index]
     try:
@@ -58,7 +60,7 @@ class MathImagesClipDataset(Dataset):
     text = entry.title.strip() or entry.image_id
     return image_tensor, text
 
-
+# todo: the orginal blueprint had one to many agruments. I think this is overkill, look into removing a few
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Fine-tune CLIP on the MathImages dataset.")
   parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
@@ -71,9 +73,9 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument("--model-name", default="ViT-B-32")
   parser.add_argument("--pretrained", default="openai")
-  parser.add_argument("--batch-size", type=int, default=64)
+  parser.add_argument("--batch-size", type=int, default=32)
   parser.add_argument("--epochs", type=int, default=5)
-  parser.add_argument("--lr", type=float, default=5e-5)
+  parser.add_argument("--lr", type=float, default=1e-5)
   parser.add_argument("--weight-decay", type=float, default=0.2)
   parser.add_argument("--beta1", type=float, default=0.9)
   parser.add_argument("--beta2", type=float, default=0.98)
@@ -84,9 +86,21 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--limit", type=int, default=None, help="Only use the first N examples.")
   parser.add_argument("--device", default=None, help="Override the training device, e.g. cuda:0 or cpu.")
   parser.add_argument("--log-every", type=int, default=50)
-  parser.add_argument("--save-every", type=int, default=1)
+  parser.add_argument("--save-every", type=int, default=5)
   parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
   parser.add_argument("--resume", type=Path, default=None)
+  parser.add_argument(
+    "--freeze-text-encoder",
+    action="store_true",
+    default=True,
+    help="Freeze the CLIP text encoder during training (default). Only the image encoder is updated.",
+  )
+  parser.add_argument(
+    "--no-freeze-text-encoder",
+    dest="freeze_text_encoder",
+    action="store_false",
+    help="Train all weights. Text encoder quality may degrade for text-to-text tasks like ARQMath.",
+  )
   return parser.parse_args()
 
 
@@ -140,7 +154,7 @@ def retrieve_math_image_entries(
 
   return entries
 
-# split the dataset into train and validation sets, ensuring that each set has at least 2 examples for contrastive learning, and build a collate function for the dataloader that handles variable batch sizes due to skipped examples. Then define the training loop with mixed precision support, checkpoint saving/loading, and logging of training/validation loss. Finally, run the main function to execute the training process.
+# split the dataset into train and validation sets
 def split_entries(
   entries: Sequence[MathImageEntry],
   val_split: float,
@@ -168,17 +182,20 @@ def split_entries(
   train_entries = shuffled[val_size:]
   return train_entries, val_entries
 
-# filter out batches with fewer than 2 samples, since CLIP contrastive loss requires at least 2 pairs, and log the number of skipped batches. Also, implement mixed precision training with automatic device selection and proper handling of the optimizer and scaler states in the checkpointing functions.
+# filter out batches with fewer than 2 samples, since CLIP contrastive loss requires at least 2 pairs, 
+# and log the number of skipped batches.
 def build_collate_fn(tokenizer: Callable) -> Callable:
+  # we need a function to return a function, reason for this nested function
+  # this function receives a batch of samples, removes Nones, splits it into images and texts, stacks the images into a tensor,
+  # and tokenizes the texts into another tensor, which are then returned as a tuple. If all samples in the batch are None, 
+  # it returns empty tensors.
   def collate_fn(batch: Sequence[Optional[Tuple[torch.Tensor, str]]]) -> Tuple[torch.Tensor, torch.Tensor]:
-    valid_batch = [item for item in batch if item is not None]
-    if not valid_batch:
+    batch = [item for item in batch if item is not None]
+    if not batch:
       return torch.empty(0), torch.empty(0, dtype=torch.long)
 
-    images, texts = zip(*valid_batch)
-    image_batch = torch.stack(list(images), dim=0)
-    token_batch = tokenizer(list(texts))
-    return image_batch, token_batch
+    images, texts = zip(*batch)
+    return torch.stack(images), tokenizer(texts)
 
   return collate_fn
 
@@ -233,25 +250,26 @@ def load_checkpoint(
   best_val_loss = checkpoint.get("best_val_loss")
   return start_epoch, best_val_loss
 
-# load the CLIP model and preprocess function, ensuring that the model is in evaluation mode and moved to the correct device, and that the preprocess function is compatible with the model's expected input size and normalization.
+
+# load the CLIP model and preprocess function, ensuring that the model is in evaluation mode and moved to the correct device, 
+# and that the preprocess function is compatible with the model's expected input size and normalization.
 def get_autocast(device: torch.device):
   if device.type == "cuda":
     return torch.autocast(device_type="cuda", dtype=torch.float16)
   return nullcontext()
 
 # train one epoch, iterating over the dataloader, computing the loss, and updating the model parameters if in training mode. 
-# Log the average loss every log_every steps, and handle cases where all batches are skipped due to insufficient samples.
+# Log the average loss every 2 steps, and handle cases where all batches are skipped due to insufficient samples.
 def run_epoch(
-  model: nn.Module,
-  dataloader: DataLoader,
-  optimizer: Optional[optim.Optimizer],
-  scaler: GradScaler,
-  loss_img: nn.Module,
-  loss_txt: nn.Module,
-  device: torch.device,
-  log_every: int,
-  epoch: int,
-  phase: str,
+    model: nn.Module,           # The neural network model to train or evaluate (e.g., a CLIP model)
+    dataloader: DataLoader,     # PyTorch DataLoader providing batches of (images, texts) (e.g., train_loader)
+    optimizer: Optional[optim.Optimizer], # Optimizer for updating model parameters (e.g., Adam). None if evaluating.
+    scaler: GradScaler,         # Gradient scaler for mixed precision training (e.g., GradScaler("cuda"))
+    loss_img: nn.Module,        # Loss function for image branch (e.g., nn.CrossEntropyLoss())
+    loss_txt: nn.Module,        # Loss function for text branch (e.g., nn.CrossEntropyLoss())
+    device: torch.device,       # Device to run computations on (e.g., torch.device("cuda") or torch.device("cpu"))
+    epoch: int,                 # Current epoch number (e.g., 0 for first epoch)
+    phase: str,                 # Phase indicator (e.g., "train" or "val")
 ) -> float:
   is_training = optimizer is not None
   model.train(is_training)
@@ -259,13 +277,15 @@ def run_epoch(
   total_loss = 0.0
   num_steps = 0
   skipped_batches = 0
-  start_time = time.time()
 
   for step, (images, texts) in enumerate(dataloader, start=1):
+    # CLIP contrastive loss requires at least 2 pairs, so skip batches with fewer than 2 samples and log the number of skipped batches.
     if images.size(0) < 2:
       skipped_batches += 1
       continue
 
+    # take the images and the text tensors and move them to the correct device
+    #  non_blocking=True allows the data transfer to be asynchronous with respect to the host, improves performance 
     images = images.to(device, non_blocking=True)
     texts = texts.to(device, non_blocking=True)
 
@@ -273,24 +293,31 @@ def run_epoch(
       optimizer.zero_grad(set_to_none=True)
 
     with torch.set_grad_enabled(is_training):
+      # get auto cast enables mix percision. allows for lower memory usage and faster training on compatible hardware
+      # while maintaining numerical stability by automatically choosing the appropriate precision for each operation.
+      # example: using float 16 instead of float 32
       with get_autocast(device):
         image_features, text_features, logit_scale = model(images, texts)
         loss = clip_loss(image_features, text_features, logit_scale, loss_img, loss_txt)
 
+      # when training, scale the loss to prevent underflow when using float16 precision
+      # compute the gradients, and update the model parameters using the optimizer and scaler.
       if is_training:
         scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         scaler.step(optimizer)
         scaler.update()
 
     total_loss += float(loss.detach().cpu())
     num_steps += 1
 
-    if step % log_every == 0:
-      elapsed = time.time() - start_time
+    # log the average loss every 2 steps
+    if step % 2 == 0:
       avg_loss = total_loss / max(num_steps, 1)
       print(
         f"[{phase}] epoch={epoch + 1} step={step}/{len(dataloader)} "
-        f"avg_loss={avg_loss:.4f} elapsed={elapsed:.1f}s"
+        f"avg_loss={avg_loss:.4f}"
       )
 
   if num_steps == 0:
@@ -320,7 +347,7 @@ def main() -> None:
   torch.manual_seed(args.seed)
   random.seed(args.seed)
 
-# use a gpu, please
+  # use a gpu, please. i beg of you
   device = resolve_device(args.device)
   if device.type == "cuda":
     # allegedly uses tensorfloat-32 which is used for faster matrix multiplications 
@@ -329,6 +356,12 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = True
 
   print(f"Loading MathImages from: {args.data_root}")
+  
+  # list of our dataset, source: the dataset source name such as "MSE", "MathOverflow", or "Mathematica"
+  # image_id: the image identifier, example would be "97_2"
+  # title: the image’s title from the TSV file
+  # url: the source post’s URL
+  # image_path: the absolute path to the image file (as a Path object)
   entries = retrieve_math_image_entries(args.data_root, args.sources, args.limit)
   if not entries:
     raise RuntimeError("No usable MathImages examples were found.")
@@ -338,45 +371,76 @@ def main() -> None:
   print(f"Train: {len(train_entries)} | Val: {len(val_entries)}")
   print(f"Source counts: {json.dumps(summarize_entries(entries), sort_keys=True)}")
 
+  # the _ is a tuple: (model, preprocess_train, preprocess_val). We dont need this, skip it
   model, _, preprocess = open_clip.create_model_and_transforms(
     args.model_name,
     pretrained=args.pretrained,
     device=device,
   )
+  # our magic box that takes text and turns them into tensors
   tokenizer = open_clip.get_tokenizer(args.model_name)
+  # this is what will be used to combine the individual samples into a batches
   collate_fn = build_collate_fn(tokenizer)
 
   train_dataset = MathImagesClipDataset(train_entries, preprocess)
   val_dataset = MathImagesClipDataset(val_entries, preprocess)
 
+  # config
   loader_kwargs = {
     "batch_size": args.batch_size,
     "num_workers": args.num_workers,
     "pin_memory": device.type == "cuda",
     "collate_fn": collate_fn,
   }
+  
   train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
   val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs) if val_entries else None
 
+  # Freeze the text encoder so its general language representations are preserved.
+  # Fine-tuning on (image, title) pairs would otherwise degrade the text encoder's
+  # ability to represent long answer posts, hurting text-to-text tasks like ARQMath.
+  if args.freeze_text_encoder:
+    for name, param in model.named_parameters():
+      if not name.startswith("visual"):
+        param.requires_grad_(False)
+    # logit_scale is shared; keep it trainable so the image-text temperature can still adapt
+    model.logit_scale.requires_grad_(True)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    frozen_count = sum(1 for p in model.parameters() if not p.requires_grad)
+    print(
+      f"Text encoder frozen. {len(trainable_params)} trainable param tensors, "
+      f"{frozen_count} frozen."
+    )
+  else:
+    print("Warning: training all parameters. Text encoder quality may degrade for text-to-text tasks.")
+    trainable_params = list(model.parameters())
+
+  # loss functions for the image and text branches, and the optimizer for updating the model parameters during training.
   loss_img = nn.CrossEntropyLoss()
   loss_txt = nn.CrossEntropyLoss()
-  optimizer = optim.Adam(
-    model.parameters(),
+  optimizer = optim.AdamW(
+    trainable_params,
     lr=args.lr,
     betas=(args.beta1, args.beta2),
     eps=args.eps,
     weight_decay=args.weight_decay,
   )
+  
+  # claims to prevent underflow when using float16 precision. Makes training more stable
+  # Note if loss scaling is too aggressive or too small, gradients may overflow or underflow, 
+  # causing instability or slow convergence due to this scaler
   scaler = GradScaler(device.type, enabled=device.type == "cuda")
 
   start_epoch = 0
   best_val_loss: Optional[float] = None
+  # load a checkpoint
   if args.resume is not None:
     start_epoch, best_val_loss = load_checkpoint(args.resume, model, optimizer, scaler)
     print(f"Resumed from {args.resume} at epoch {start_epoch}.")
 
   args.output_dir.mkdir(parents=True, exist_ok=True)
 
+  #  MAIN TRAINING LOOP STARTS HERE   
   for epoch in range(start_epoch, args.epochs):
     train_loss = run_epoch(
       model=model,
@@ -386,14 +450,16 @@ def main() -> None:
       loss_img=loss_img,
       loss_txt=loss_txt,
       device=device,
-      log_every=args.log_every,
       epoch=epoch,
       phase="train",
     )
 
+    # metrics starts as just train loss, adds val loss later on
     metrics = {"train_loss": train_loss}
+    
     print(f"Epoch {epoch + 1}/{args.epochs} train_loss={train_loss:.4f}")
 
+    # runs after each epoch, may be reduced later on
     if val_loader is not None:
       with torch.no_grad():
         val_loss = run_epoch(
@@ -404,13 +470,13 @@ def main() -> None:
           loss_img=loss_img,
           loss_txt=loss_txt,
           device=device,
-          log_every=max(args.log_every, 1),
           epoch=epoch,
           phase="val",
         )
       metrics["val_loss"] = val_loss
       print(f"Epoch {epoch + 1}/{args.epochs} val_loss={val_loss:.4f}")
 
+      # check if this is the best validation loss so far
       if best_val_loss is None or val_loss < best_val_loss:
         best_val_loss = val_loss
         save_checkpoint(
@@ -425,6 +491,8 @@ def main() -> None:
         )
         print(f"Saved new best checkpoint to {args.output_dir / 'best.pt'}")
 
+    # save a checkpoint every save_every epochs, 
+    # these computers have failed me one to many times to not do this
     if (epoch + 1) % args.save_every == 0:
       save_checkpoint(
         args.output_dir / f"epoch_{epoch + 1:03d}.pt",
@@ -437,6 +505,7 @@ def main() -> None:
         metrics,
       )
 
+    # saves a checkpoint for the last epoch
     save_checkpoint(
       args.output_dir / "last.pt",
       epoch,
@@ -452,7 +521,6 @@ def main() -> None:
   print(f"Final checkpoint: {args.output_dir / 'last.pt'}")
   if best_val_loss is not None:
     print(f"Best validation loss: {best_val_loss:.4f}")
-
 
 if __name__ == "__main__":
   main()
