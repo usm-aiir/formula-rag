@@ -1,10 +1,9 @@
 """
-Convert Content MathML (OPT) strings into PyTorch Geometric Data objects.
+Convert Content MathML (OPT) and Presentation MathML (SLT) strings 
+into PyTorch Geometric Data objects.
 
-Each XML element becomes a node; parent→child relationships become directed
+Each XML element becomes a node; parent-->child relationships become directed
 edges (we add reverse edges to make the graph undirected for message passing).
-Node features are integer type IDs looked up from a fixed vocabulary built from
-the 96 unique tags observed across the full ARQMath formula index.
 """
 
 from __future__ import annotations
@@ -15,14 +14,11 @@ from typing import List, Optional, Tuple
 import torch
 from torch_geometric.data import Data
 
-# ---------------------------------------------------------------------------
-# Node-type vocabulary
-# All 96 tags seen across the corpus.
-# ID 0  → unknown / unseen tag
-# IDs 1… → actual MathML tag names
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# OPT (Semantic) Vocabulary
+# ===========================================================================
 
-_TAGS: List[str] = [
+_OPT_TAGS: List[str] = [
     # high-frequency structural / operator tags
     "ci", "apply", "csymbol", "cn", "math", "times", "eq", "minus",
     "divide", "plus", "interval", "and", "cerror", "in", "list",
@@ -40,10 +36,29 @@ _TAGS: List[str] = [
     "mo", "mi", "mn",
 ]
 
-TAG2ID = {tag: idx + 1 for idx, tag in enumerate(_TAGS)}
-VOCAB_SIZE = len(_TAGS) + 1  # 97 total IDs (0 = unknown)
+OPT_TAG2ID = {tag: idx + 1 for idx, tag in enumerate(_OPT_TAGS)}
+OPT_VOCAB_SIZE = len(_OPT_TAGS) + 1  # (0 = unknown)
 
-# Maximum tree nodes per formula; trees larger than this are truncated (BFS order)
+# Maintain backward compatibility for Phase 1 code
+VOCAB_SIZE = OPT_VOCAB_SIZE 
+
+# ===========================================================================
+# 2. SLT (Visual Layout) Vocabulary
+# ===========================================================================
+
+_SLT_TAGS: List[str] = [
+    # Core Presentation MathML Tags
+    "math", "mrow", "mi", "mo", "mn", "mfrac", "msup", "msub", 
+    "msubsup", "msqrt", "mroot", "mfenced", "mtable", "mtr", 
+    "mtd", "munderover", "mover", "munder", "mspace", "mphantom", 
+    "mtext", "mstyle", "maligngroup", "malignmark", "menclose", "maction"
+]
+
+SLT_TAG2ID = {tag: idx + 1 for idx, tag in enumerate(_SLT_TAGS)}
+SLT_VOCAB_SIZE = len(_SLT_TAGS) + 1  # (0 = unknown)
+
+
+# Maximum tree nodes per formula
 MAX_NODES = 256
 
 
@@ -54,23 +69,17 @@ def _strip_ns(tag: str) -> str:
     return tag
 
 
-def opt_to_pyg(opt_xml: str) -> Optional[Data]:
-    """
-    Parse a Content MathML string and return a PyG Data object, or None if
-    the XML is malformed or yields fewer than 2 nodes.
+# ===========================================================================
+# Parsers
+# ===========================================================================
 
-    Returns
-    -------
-    Data with attributes:
-        x          : LongTensor[num_nodes]       node type IDs
-        edge_index : LongTensor[2, num_edges]    COO undirected edges
-        num_nodes  : int
-    """
-    if not opt_xml:
+def _xml_to_pyg(xml_str: str, tag2id: dict) -> Optional[Data]:
+    """Internal base parser for both modalities."""
+    if not xml_str:
         return None
 
     try:
-        root = ET.fromstring(opt_xml)
+        root = ET.fromstring(xml_str)
     except ET.ParseError:
         return None
 
@@ -83,7 +92,9 @@ def opt_to_pyg(opt_xml: str) -> Optional[Data]:
         elem, parent_idx = pending.pop(0)
         idx = len(node_ids)
         tag = _strip_ns(elem.tag)
-        node_ids.append(TAG2ID.get(tag, 0))
+        
+        # Use the specific vocabulary (OPT or SLT)
+        node_ids.append(tag2id.get(tag, 0))
 
         if parent_idx >= 0:
             edges_src.extend([parent_idx, idx])
@@ -99,17 +110,37 @@ def opt_to_pyg(opt_xml: str) -> Optional[Data]:
     edge_index = (
         torch.tensor([edges_src, edges_dst], dtype=torch.long)
         if edges_src
-        else torch.zeros((2, 1), dtype=torch.long)  # self-loop fallback
+        else torch.zeros((2, 1), dtype=torch.long)
     )
     return Data(x=x, edge_index=edge_index, num_nodes=len(node_ids))
 
 
+def opt_to_pyg(opt_xml: str) -> Optional[Data]:
+    """Parse Content MathML (OPT) → PyG Data"""
+    return _xml_to_pyg(opt_xml, OPT_TAG2ID)
+
+def slt_to_pyg(slt_xml: str) -> Optional[Data]:
+    """Parse Presentation MathML (SLT) → PyG Data"""
+    return _xml_to_pyg(slt_xml, SLT_TAG2ID)
+
+
 def batch_opt_to_pyg(opt_list: List[Optional[str]]) -> Tuple[List[Data], List[bool]]:
-    """Batch-convert OPT strings; returns (graphs, valid_mask)."""
     graphs: List[Data] = []
     mask: List[bool] = []
     for opt in opt_list:
         g = opt_to_pyg(opt)
+        if g is not None:
+            graphs.append(g)
+            mask.append(True)
+        else:
+            mask.append(False)
+    return graphs, mask
+
+def batch_slt_to_pyg(slt_list: List[Optional[str]]) -> Tuple[List[Data], List[bool]]:
+    graphs: List[Data] = []
+    mask: List[bool] = []
+    for slt in slt_list:
+        g = slt_to_pyg(slt)
         if g is not None:
             graphs.append(g)
             mask.append(True)

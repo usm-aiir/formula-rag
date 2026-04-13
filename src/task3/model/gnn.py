@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Batch
 from torch_geometric.nn import GATConv, LayerNorm, global_max_pool, global_mean_pool
 
-from src.data.formula_graph import VOCAB_SIZE
+# from src.data.formula_graph import VOCAB_SIZE
 
 
 class GATFormulaEncoder(nn.Module):
@@ -50,6 +50,7 @@ class GATFormulaEncoder(nn.Module):
 
     def __init__(
         self,
+        vocab_size: int,         # NEW: Dynamic vocabulary size
         node_emb_dim: int = 64,
         hidden_dim: int = 128,
         num_heads: int = 4,
@@ -62,7 +63,8 @@ class GATFormulaEncoder(nn.Module):
         self.dropout = dropout
         in_dim = node_emb_dim
 
-        self.node_emb = nn.Embedding(VOCAB_SIZE, node_emb_dim, padding_idx=0)
+        # self.node_emb = nn.Embedding(VOCAB_SIZE, node_emb_dim, padding_idx=0)
+        self.node_emb = nn.Embedding(vocab_size, node_emb_dim, padding_idx=0) # Vocab size correlates to OPT vs SLT
 
         self.gat_layers = nn.ModuleList()
         self.layer_norms = nn.ModuleList()
@@ -105,7 +107,7 @@ class GATFormulaEncoder(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
-    def forward(self, batch: Batch, normalize: bool = True) -> torch.Tensor:
+    def forward(self, batch: Batch, normalize: bool = True, output_nodes: bool = False) -> torch.Tensor:
         """
         Parameters
         ----------
@@ -113,6 +115,8 @@ class GATFormulaEncoder(nn.Module):
             Batched graph with x (node type IDs), edge_index, and batch vector.
         normalize : bool
             If True, L2-normalise the output embeddings.
+        output_nodes : bool
+            If True, return the raw un-pooled node embeddings.
 
         Returns
         -------
@@ -127,6 +131,9 @@ class GATFormulaEncoder(nn.Module):
             x = gat(x, edge_index)
             x = F.dropout(x, p=self.dropout, training=self.training)
             x = ln(x + residual, batch_vec)
+
+        if output_nodes:
+            return x
 
         x_pool = torch.cat([global_mean_pool(x, batch_vec),
                              global_max_pool(x, batch_vec)], dim=-1)

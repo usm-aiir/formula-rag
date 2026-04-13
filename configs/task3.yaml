@@ -1,0 +1,28 @@
+# Task 3: GNN formula encoder — ARQMath Task 2 (Formula Retrieval)
+#
+# Trains on Years 1 & 2 qrels, evaluates on Year 3.
+# Uses symmetric InfoNCE with in-batch negatives and learnable temperature.
+
+model:
+  opt_vocab_size: 81
+  slt_vocab_size: 27
+  node_emb_dim: 64
+  hidden_dim: 128
+  num_heads: 4
+  num_layers: 4
+  branch_output_dim: 256 # What each GNN outputs
+  num_fusion_heads: 4    # No. of parallel interviews for cross
+  final_output_dim: 256  # What the Fusion MLP outputs to FAISS
+  dropout: 0.1
+
+training:
+  batch_size: 128
+  epochs: 50
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  warmup_ratio: 0.05
+  temperature_init: 0.07
+  early_stopping_patience: 5
+  num_workers: 4
+  seed: 42
+  checkpoint_dir: checkpoints/task3
