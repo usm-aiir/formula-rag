@@ -1,6 +1,6 @@
 # Formula RAG: Two-Stage Formula Retrieval Engine
 
-This directory contains a two-stage mathematical retrieval engine designed to act as the formula-fetching component of our overarching Tri-RAG (Text, Formula, Image) architecture.
+This directory contains a two-stage mathematical retrieval engine designed to act as the formula-fetching component of our overarching Tri-RAG (Text, Formula, Image) architecture. 
 
 It queries the ARQMath corpus using a fast neural/sparse hybrid approach, followed by a structural subtree coverage re-ranker.
 
@@ -15,6 +15,25 @@ The pipeline is split into two distinct execution phases:
 2. **Structural Re-ranker**
    * **Method:** Fetches the raw MathML (OPT/SLT) of the top K candidates from a heavily indexed SQLite cache and shreds them into max-depth-4 structural paths. It applies IDF-weighted subtree coverage scoring with deterministic canonicalization for commutative operators.
    * **Output:** Yields the final retrieval results.
+
+## Prerequisites: Installing the Semantic Compiler (LaTeXML)
+
+This engine requires **LaTeXML** to perform high-precision semantic parsing, allowing for the conversion from LaTeX to SLT and OPT formula representations. Unlike standard visual compilers, LaTeXML generates the Content MathML (OPT) required for structural re-ranking.
+
+### User-Space Installation (No Sudo Required)
+If you are on a shared research server like `mirage`, install LaTeXML into your home directory using Perl's local manager:
+
+```bash
+# 1. Install local Perl manager
+curl -L [https://cpanmin.us](https://cpanmin.us) | perl - -l ~/perl5 App::cpanminus local::lib
+
+# 2. Configure environment (Add to .bashrc)
+eval $(perl -I ~/perl5/lib/perl5/ -Mlocal::lib)
+echo 'eval $(perl -I ~/perl5/lib/perl5/ -Mlocal::lib)' >> ~/.bashrc
+
+# 3. Install LaTeXML (Skip tests to bypass missing TeX styling dependencies)
+cpanm --notest LaTeXML
+```
 
 ## Key Files & Structure
 
