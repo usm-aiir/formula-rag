@@ -2,38 +2,43 @@
 Results Visualizer Dashboard
 
 A Streamlit app to interactively explore the top results from the Structural Re-ranker.
-Reads the raw SLT (Presentation MathML) and renders it natively in the browser,
-supplemented with analytical metrics for retrieval confidence.
+Features two modes:
+1. ARQMath Evaluation: Explores the offline JSON run.
+2. Live Search: Sends custom LaTeX queries to the FastAPI backend.
 """
 
 import sys
 import json
+import sqlite3
+import requests
 import pandas as pd
 import streamlit as st
-import pyarrow.parquet as pq
 from pathlib import Path
 
-# Run using `streamlit run src/task3/visualize_results.py` from the project root
 # Paths
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-_RUN_PATH = _PROJECT_ROOT / "data/processed/end_to_end_run.json"
-_PARQUET_DIR = _PROJECT_ROOT / "data/processed/formula_index"
+_RUN_PATH = _PROJECT_ROOT / "data/processed/end_to_end_run_new.json"
+_DB_PATH = _PROJECT_ROOT / "data/processed/formula_cache.db"
+_API_URL = "http://0.0.0.0:8567/search"
 
 from src.task3.dataset import load_qrels
 
-st.set_page_config(page_title="Retrieval Visualizer", layout="wide")
+st.set_page_config(page_title="Formula RAG Visualizer", layout="wide")
 
+# ==========================================
+# DATA LOADING (SQLite Optimized)
+# ==========================================
 @st.cache_data
-def load_dashboard_data():
-    """Loads the run data and extracts only the needed MathML from the 8.3M corpus."""
-    
-    # Load the run results
+def load_eval_data():
+    """Loads the offline run data for the benchmark tab."""
+    if not _RUN_PATH.exists():
+        return {}, {}
+
     with open(_RUN_PATH, "r") as f:
         run_data = json.load(f)
 
-    # Get Proxy IDs for queries
     qrels = load_qrels("eval")  
     proxy_vid_to_topic = {}
     for topic_id, items in qrels.items():
@@ -43,126 +48,149 @@ def load_dashboard_data():
             
     topic_to_proxy_vid = {v: k for k, v in proxy_vid_to_topic.items()}
 
-    # Collect all visual_ids we need to extract (Queries + Top K Results)
-    needed_vids = set(proxy_vid_to_topic.keys())
-    top_k = 10
     topic_top_results = {}
-
     for topic_id, results in run_data.items():
-        sorted_res = sorted(results.items(), key=lambda x: x[1], reverse=True)[:top_k]
-        topic_top_results[topic_id] = sorted_res
-        for vid, score in sorted_res:
-            needed_vids.add(str(vid))
+        topic_top_results[topic_id] = sorted(results.items(), key=lambda x: x[1], reverse=True)[:10]
 
-    # Scan Parquets to extract the Presentation MathML
+    return topic_to_proxy_vid, topic_top_results
+
+def fetch_mathml_from_sqlite(vids: list) -> dict:
+    """Instantly fetches MathML strings from the SQLite cache."""
     extracted_math = {}
-    shard_files = sorted(list(_PARQUET_DIR.glob("shard_*.parquet")))
-
-    progress_bar = st.progress(0, text="Scanning Parquet Shards for MathML...")
-    
-    for i, shard in enumerate(shard_files):
-        df = pq.read_table(shard, columns=["visual_id", "slt"]).to_pandas()
-        df = df.dropna(subset=["slt"])
+    if not vids or not _DB_PATH.exists():
+        return extracted_math
         
-        mask = df["visual_id"].astype(str).isin(needed_vids)
-        target_df = df[mask]
-
-        for _, row in target_df.iterrows():
-            extracted_math[str(row["visual_id"])] = row["slt"]
-
-        progress_bar.progress(
-            (i + 1) / len(shard_files), 
-            text=f"Extracting MathML... ({len(extracted_math)}/{len(needed_vids)} found)"
-        )
-
-        if len(extracted_math) == len(needed_vids):
-            break
-
-    progress_bar.empty()
-    return run_data, topic_to_proxy_vid, topic_top_results, extracted_math
-
-# ==========================================
-# UI RENDERING & ANALYTICS
-# ==========================================
-st.title("Formula RAG: Retrieval Dashboard")
-st.markdown("Exploring the Top 10 results retrieved by the Structural Re-ranker.")
-
-with st.spinner("Initializing Data (This will take ~60 seconds on the first run)..."):
-    run_data, topic_to_proxy_vid, topic_top_results, extracted_math = load_dashboard_data()
-
-# --- GLOBAL METRICS CALCULATION ---
-avg_scores_dict = {}
-for t_id, res in topic_top_results.items():
-    if res:
-        avg_scores_dict[t_id] = sum(score for _, score in res) / len(res)
-
-# Convert to DataFrame for easier Streamlit charting
-df_global_metrics = pd.DataFrame(
-    list(avg_scores_dict.items()), 
-    columns=["Topic ID", "Average Score"]
-).set_index("Topic ID")
-
-# Global Chart Expander
-with st.expander("📊 Global Analytics: Top 10 Average Score per Query", expanded=False):
-    st.markdown("Identifies which topics have the strongest overall structural alignments.")
-    st.bar_chart(df_global_metrics, y="Average Score", color="#4CAF50")
-
-# --- SIDEBAR & TOPIC SELECTION ---
-available_topics = sorted(list(run_data.keys()))
-selected_topic = st.sidebar.selectbox("Select ARQMath Topic Query:", available_topics, help=f"Total: {len(available_topics)} Topics")
-
-if selected_topic:
-    st.divider()
-    
-    # LOCAL QUERY METRICS (KPI Cards)
-    results = topic_top_results.get(selected_topic, [])
-    current_avg = avg_scores_dict.get(selected_topic, 0.0)
-    max_score = results[0][1] if results else 0.0
-    
-    colA, colB, colC = st.columns(3)
-    colA.metric(label="Average Top 10 Score", value=f"{current_avg:.4f}")
-    colB.metric(label="Maximum Score (Rank 1)", value=f"{max_score:.4f}")
-    colC.metric(label="Candidates Retrieved", value=len(results))
-    
-    st.divider()
-
-    # DISPLAY TARGET QUERY
-    query_vid = topic_to_proxy_vid.get(selected_topic)
-    query_math = extracted_math.get(query_vid, "<i>Query MathML not found in shards</i>")
-    
-    st.subheader(f"Target Query (Topic {selected_topic})")
-    st.info("What the user searched for:")
-    st.markdown(f"<div style='font-size: 1.5em;'>{query_math}</div>", unsafe_allow_html=True)
-    
-    st.divider()
-    st.subheader("Top 10 Retrieved Formulas")
-    
-    # DISPLAY RESULTS
-    for rank, (vid, score) in enumerate(results, 1):
-        math_slt = extracted_math.get(vid, "<i>MathML missing</i>")
+    try:
+        with sqlite3.connect(_DB_PATH) as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join('?' for _ in vids)
+            cursor.execute(f"SELECT visual_id, slt FROM formulas WHERE visual_id IN ({placeholders})", vids)
+            for row in cursor.fetchall():
+                extracted_math[str(row[0])] = row[1]
+    except Exception as e:
+        st.error(f"Database Error: {e}")
         
-        # Calculate Delta from Average
-        score_delta = score - current_avg
-        
-        with st.container():
-            col1, col2 = st.columns([1, 5])
-            with col1:
-                st.markdown(f"<h3 style='margin-bottom: 0px; padding-bottom: 0px;'>Rank #{rank}</h3>", unsafe_allow_html=True)
-                
-                # Show score and delta compared to the query average
-                if score_delta >= 0:
-                    delta_color = "green"
-                    delta_sign = "+"
-                else:
-                    delta_color = "red"
-                    delta_sign = ""
-                
+    return extracted_math
+
+def render_result_card(rank, vid, score, math_slt, current_avg=None):
+    """Helper to render a clean UI card for a retrieved formula."""
+    with st.container():
+        col1, col2 = st.columns([1, 5])
+        with col1:
+            st.markdown(f"<h3 style='margin-bottom: 0px; padding-bottom: 0px;'>Rank #{rank}</h3>", unsafe_allow_html=True)
+            
+            if current_avg is not None:
+                score_delta = score - current_avg
+                delta_color = "green" if score_delta >= 0 else "red"
+                delta_sign = "+" if score_delta >= 0 else ""
                 st.markdown(
                     f"<div style='font-size: 0.85em; font-weight: bold;'>Score: {score:.4f}</div>"
                     f"<div style='font-size: 0.75em; color: {delta_color}; margin-top: -5px;'>{delta_sign}{score_delta:.4f} vs avg</div>", 
                     unsafe_allow_html=True
                 )
-                st.caption(f"VID: {vid}")
-            with col2:
-                st.markdown(f"<div style='font-size: 1.3em; padding-top: 10px;'>{math_slt}</div>", unsafe_allow_html=True)
-        st.markdown("---")
+            else:
+                st.markdown(f"<div style='font-size: 0.85em; font-weight: bold;'>Score: {score:.4f}</div>", unsafe_allow_html=True)
+                
+            st.caption(f"VID: {vid}")
+        with col2:
+            st.markdown(f"<div style='font-size: 1.3em; padding-top: 10px;'>{math_slt}</div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+
+# ==========================================
+# UI LAYOUT
+# ==========================================
+st.title("Formula RAG: Retrieval Dashboard")
+st.markdown(f"Explore the Tri-RAG Dual Encoder Engine from {_RUN_PATH.name}")
+
+tab1, tab2 = st.tabs(["Live Custom Search", "ARQMath Evaluation Benchmark"])
+
+# ---------------------------------------------------------
+# TAB 1: LIVE SEARCH (Queries the FastAPI Backend)
+# ---------------------------------------------------------
+with tab1:
+    st.subheader("Test Live Inference")
+    st.markdown("Enter a LaTeX formula to query the 8.3M corpus in real-time. *(Ensure the FastAPI server is running!)*")
+    
+    with st.form("search_form"):
+        col_query, col_k = st.columns([4, 1])
+        with col_query:
+            user_query = st.text_input("LaTeX Query:", value=r"\int_{0}^{\infty} e^{-x^2} dx")
+        with col_k:
+            top_k_val = st.number_input("Top K:", min_value=1, max_value=50, value=10)
+            
+        submitted = st.form_submit_button("Search 🔍", type="primary")
+
+    if submitted and user_query:
+        with st.spinner("Querying API..."):
+            try:
+                response = requests.post(_API_URL, json={"query": user_query, "top_k": top_k_val}, timeout=30)
+                if response.status_code == 200:
+                    api_data = response.json()
+                    results = api_data.get("results", [])
+                    
+                    if not results:
+                        st.warning("No structural matches found.")
+                    else:
+                        st.success(f"Found {len(results)} matches!")
+                        
+                        # Fetch XMLs for the results
+                        result_vids = [r["visual_id"] for r in results]
+                        math_dict = fetch_mathml_from_sqlite(result_vids)
+                        
+                        # Render
+                        for res in results:
+                            slt = math_dict.get(res["visual_id"], "<i>MathML not found</i>")
+                            render_result_card(res["rank"], res["visual_id"], res["score"], slt)
+                else:
+                    st.error(f"API Error {response.status_code}: {response.text}")
+            except requests.exceptions.ConnectionError:
+                st.error("❌ Could not connect to API. Please ensure `python src/task3/api_server.py` is running in another terminal.")
+
+# ---------------------------------------------------------
+# TAB 2: ARQMATH BENCHMARK (Reads offline JSON)
+# ---------------------------------------------------------
+with tab2:
+    topic_to_proxy_vid, topic_top_results = load_eval_data()
+    
+    if not topic_top_results:
+        st.warning("Evaluation run data not found. Please run the evaluation script first.")
+    else:
+        available_topics = sorted(list(topic_top_results.keys()))
+        selected_topic = st.selectbox("Select ARQMath Topic Query:", available_topics)
+
+        if selected_topic:
+            st.divider()
+            results = topic_top_results.get(selected_topic, [])
+            
+            # Fetch all needed MathML (Query + Top 10)
+            needed_vids = [vid for vid, score in results]
+            query_vid = topic_to_proxy_vid.get(selected_topic)
+            if query_vid: needed_vids.append(query_vid)
+            
+            math_dict = fetch_mathml_from_sqlite(needed_vids)
+
+            # Metrics
+            avg_score = sum(score for _, score in results) / len(results) if results else 0.0
+            max_score = results[0][1] if results else 0.0
+            
+            colA, colB, colC = st.columns(3)
+            colA.metric(label="Average Top 10 Score", value=f"{avg_score:.4f}")
+            colB.metric(label="Maximum Score (Rank 1)", value=f"{max_score:.4f}")
+            colC.metric(label="Candidates Retrieved", value=len(results))
+            
+            st.divider()
+            
+            # Display Target Query
+            query_math = math_dict.get(query_vid, "<i>Query MathML not found</i>")
+            st.subheader(f"Target Query (Topic {selected_topic})")
+            st.info("What the user searched for:")
+            st.markdown(f"<div style='font-size: 1.5em;'>{query_math}</div>", unsafe_allow_html=True)
+            
+            st.divider()
+            st.subheader("Top 10 Retrieved Formulas")
+            
+            # Display Results
+            for rank, (vid, score) in enumerate(results, 1):
+                math_slt = math_dict.get(vid, "<i>MathML missing</i>")
+                render_result_card(rank, vid, score, math_slt, current_avg=avg_score)

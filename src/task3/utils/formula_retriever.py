@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
-
+import subprocess
 import numpy as np
 import pyarrow.parquet as pq
 import torch
@@ -74,18 +74,45 @@ class FormulaRetriever:
     # ==========================================
     # HELPER FUNCTIONS
     # ==========================================
+
     def _parse_latex(self, latex_str: str) -> Dict[str, str]:
         """
-        Converts raw LaTeX to MathML XML.
-        Note: latex2mathml primarily generates Presentation MathML (SLT).
-        For production, we duplicate it to OPT to satisfy the DualEncoder.
+        Converts raw LaTeX to MathML XML using a local LaTeXML installation.
+        Safely generates both Presentation MathML (SLT) and Content MathML (OPT).
         """
+        result = {"opt": "", "slt": ""}
+        
         try:
-            mathml = latex2mathml.converter.convert(latex_str)
-            return {"opt": mathml, "slt": mathml}
-        except Exception as e:
-            print(f"Failed to parse LaTeX: {e}")
-            return {"opt": "", "slt": ""}
+            # We pass the LaTeX via stdin (input=latex_str) and use the "-" flag.
+            # This completely avoids dealing with shell escaping and special characters in LaTeX.
+
+            # Generate Presentation MathML (SLT)
+            slt_process = subprocess.run(
+                ["latexmlmath", "--pmml=-", "-"],
+                input=latex_str,
+                text=True,
+                capture_output=True,
+                check=True
+            )
+            result["slt"] = slt_process.stdout.strip()
+
+            # Generate Content MathML / Operator Tree (OPT)
+            opt_process = subprocess.run(
+                ["latexmlmath", "--cmml=-", "-"],
+                input=latex_str,
+                text=True,
+                capture_output=True,
+                check=True
+            )
+            result["opt"] = opt_process.stdout.strip()
+
+        except subprocess.CalledProcessError as e:
+            print(f"LaTeXML Parsing Error on query '{latex_str}':\nSTDERR: {e.stderr}")
+        except FileNotFoundError:
+            print("CRITICAL ERROR: 'latexmlmath' is not installed on this system.")
+            print("Please run: sudo apt install latexml")
+            
+        return result
 
     def _min_max_normalize(self, scores_dict: dict) -> dict:
         if not scores_dict: return {}
@@ -184,7 +211,10 @@ class FormulaRetriever:
         print(f"Processing Query: {latex_query}")
         
         # Parsing
-        q_xml = self._parse_latex(latex_query)
+        # q_xml = self._parse_latex(latex_query)
+        returned_xml = self._parse_latex(latex_query)
+        q_xml = {"opt": returned_xml["opt"], "slt": returned_xml["slt"]}
+        
         if not q_xml["opt"]:
             return []
 
