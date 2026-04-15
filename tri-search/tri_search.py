@@ -6,9 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
-import requests
 import torch
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from huggingface_hub import login
 from peft import PeftModel
@@ -121,31 +119,10 @@ def prompt_model(prompt: str) -> str:
     if generated.startswith(prompt):
         generated = generated[len(prompt) :]
 
-    return _extract_final_answer(generated.strip())
+    return generated.strip()
 
 
-def scrape_post_url(url: str, max_chars: int = 1500) -> str:
-    """Scrape question and top-2 answers from any Stack Exchange post URL."""
-    try:
-        headers = {"User-Agent": "TriSearchRAG/0.1"}
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        parts: List[str] = []
-        question_body = soup.select_one(".question .s-prose")
-        if question_body:
-            parts.append("Question:\n" + question_body.get_text(separator=" ", strip=True))
-        for answer in soup.select(".answer .s-prose")[:2]:
-            parts.append("Answer:\n" + answer.get_text(separator=" ", strip=True))
-
-        text = "\n\n".join(parts).strip()
-        if len(text) > max_chars:
-            text = text[:max_chars] + "..."
-        return text
-    except Exception as err:
-        logger.warning("Could not scrape %s: %s", url, err)
-        return ""
+from utils.scrape_url import scrape_post_url
 
 
 def image_sources(query: str, k: int = 5) -> str:
@@ -170,40 +147,76 @@ def image_sources(query: str, k: int = 5) -> str:
     return "\n\n".join(parts)
 
 
-def formula_sources(query: str, top_k: int = 5) -> str:
+def cft_sources(query: str, top_k: int = 5) -> str:
     """
-    Extract LaTeX formulas from the query, retrieve similar formulas via TangentCFT,
-    scrape the originating MSE posts, and return the combined text.
+    Extract LaTeX formulas from the query, retrieve similar formulas via
+    TangentCFT, scrape the source post for each unique thread, and return
+    the combined post text as context.
     """
     from formula_handler import FormulaHandler
     from formula_utils import extract_formulas
 
-    formulas = extract_formulas(query)
-    if not formulas:
-        logger.info("No formulas detected in query; skipping formula retrieval.")
+    query_formulas = extract_formulas(query)
+    if not query_formulas:
+        logger.info("No formulas detected in query; skipping TangentCFT retrieval.")
         return ""
 
-    logger.info("Retrieving formula sources for: %s", formulas)
-    handler = FormulaHandler(formulas)
-    results = handler.retrieve_similar_formulas(top_k=top_k)
+    logger.info("Retrieving TangentCFT formula sources for: %s", query_formulas)
+
+    handler = FormulaHandler(query_formulas)
+    hits = handler.retrieve_similar_formulas(top_k=top_k * 3)
 
     parts: List[str] = []
     seen_threads: set = set()
-    for hit in results:
+    for hit in hits:
+        if len(parts) >= top_k:
+            break
         thread_id = hit.get("thread_id")
         if not thread_id or thread_id in seen_threads:
             continue
         seen_threads.add(thread_id)
-
-        post_text = scrape_post_url(f"https://math.stackexchange.com/q/{thread_id}")
+        url = f"https://math.stackexchange.com/q/{thread_id}"
+        post_text = scrape_post_url(url)
         if post_text:
-            header = hit.get("original_question") or f"MSE post #{thread_id}"
-            parts.append(
-                f"[Formula Match: {hit.get('returned_formula', '')}]\n{header}\n{post_text}"
-            )
+            parts.append(f"[Formula source: {url}]\n{post_text}")
 
     return "\n\n".join(parts)
 
+def formula_sources(query: str, top_k: int = 5) -> str:
+    """
+    Extract LaTeX formulas from the query, retrieve similar formulas via the
+    GNN (GAT) encoder, scrape the source post for each unique post ID, and
+    return the combined post text as context.
+    """
+    import gnn_handler
+    from formula_utils import extract_formulas
+
+    query_formulas = extract_formulas(query)
+    if not query_formulas:
+        logger.info("No formulas detected in query; skipping formula retrieval.")
+        return ""
+
+    logger.info("Retrieving GNN formula sources for: %s", query_formulas)
+
+    parts: List[str] = []
+    seen_posts: set = set()
+    for source_latex in query_formulas:
+        if len(parts) >= top_k:
+            break
+        hits = gnn_handler.search(source_latex, k=top_k)
+        for hit in hits:
+            if len(parts) >= top_k:
+                break
+            post_id = hit.get("post_id")
+            if not post_id or post_id in seen_posts:
+                continue
+            seen_posts.add(post_id)
+            url = f"https://math.stackexchange.com/q/{post_id}"
+            post_text = scrape_post_url(url)
+            if post_text:
+                parts.append(f"[Formula source: {url}]\n{post_text}")
+
+    return "\n\n".join(parts)
 
 def text_sources(query: str, top_k: int = 5) -> str:
     """Return the top-k relevant text passages from OpenSearch for the given query."""
@@ -223,25 +236,30 @@ def rag_query(
     # Run the three retrieval tasks in parallel to save time
     with ThreadPoolExecutor(max_workers=3) as executor:
         fut_text = executor.submit(text_sources, query, top_k_text)
-        fut_formulas = executor.submit(formula_sources, query, top_k_formulas)
+        fut_formulas = executor.submit(cft_sources, query, top_k_formulas)
         fut_images = executor.submit(image_sources, query, top_k_images)
         retrieved_text = fut_text.result()
         retrieved_formulas = fut_formulas.result()
         image_text = fut_images.result()
 
-    text_block     = retrieved_text   if retrieved_text   else "(no text documents retrieved)"
-    formula_block  = f"\nFormula-matched posts:\n{retrieved_formulas}\n" if retrieved_formulas else ""
-    image_block    = f"\nImage-sourced posts:\n{image_text}\n"           if image_text         else ""
+    text_block = retrieved_text if retrieved_text else "(no text documents retrieved)"
+    formula_block = (
+        f"\nFormula-matched posts:\n{retrieved_formulas}\n"
+        if retrieved_formulas
+        else ""
+    )
+    image_block = f"\nImage-sourced posts:\n{image_text}\n" if image_text else ""
 
     prompt = f"""<|system|>
-You are a mathematical answer engine. Respond with the final answer only — a single expression or number, nothing else. No steps, no explanation, no preamble.
-<|user|>
-Documents:
-{text_block}
-{formula_block}{image_block}
-Question: {query}
-<|assistant|>
-"""
+                You are a mathematical answer engine. Respond with the final answer only — a single expression or number, nothing else. No steps, no explanation, no preamble.
+                <|user|>
+                Documents:
+                {text_block}
+                {formula_block}{image_block}
+                Question: {query}
+                <|assistant|>
+                """
+    
     return prompt_model(prompt)
 
 

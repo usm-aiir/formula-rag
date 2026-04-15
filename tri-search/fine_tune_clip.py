@@ -60,7 +60,6 @@ class MathImagesClipDataset(Dataset):
     text = entry.title.strip() or entry.image_id
     return image_tensor, text
 
-# todo: the orginal blueprint had one to many agruments. I think this is overkill, look into removing a few
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Fine-tune CLIP on the MathImages dataset.")
   parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)

@@ -61,3 +61,4 @@ tri-search/arq1thru3-finetuned-all-mpnet-jul-27
 tri-search/data/clip_index/metadata.json
 tri-search/MathImages
 src/task3/misc/
+src/data/raw/arqmath/formulas/latex_representation_v3

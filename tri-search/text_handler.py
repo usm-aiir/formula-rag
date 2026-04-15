@@ -14,6 +14,9 @@ from opensearchpy import OpenSearch
 from sentence_transformers import SentenceTransformer
 from schemas.TextRetrievalResult import TextRetrievalResult
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from utils.scrape_url import scrape_post_url
+
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 logger = logging.getLogger(__name__)
 
@@ -124,11 +127,10 @@ class TextHandler:
                 search_response.get("hits", {}).get("hits", []), start=1
             ):
                 source = hit.get("_source", {})
+                link = str(source.get("link", ""))
                 text_search_results.append(
                     TextRetrievalResult(
-                        doc_id=str(
-                            hit.get("_id", source.get("link", f"doc_{position}"))
-                        ),
+                        doc_id=link or str(hit.get("_id", f"doc_{position}")),
                         score=float(hit.get("_score", 0.0) or 0.0),
                         rank=position,
                         text=str(source.get("body_text", "")),
@@ -138,10 +140,15 @@ class TextHandler:
             logger.error("Text search failed: %s", error)
 
         logger.info("Text search complete: %s results found", len(text_search_results))
-        formatted_sources = [
-            f"[Source {result.rank}]\n{result.text}"
-            for result in text_search_results
-        ]
+        formatted_sources = []
+        for result in text_search_results:
+            url = result.doc_id
+            if url.startswith("http"):
+                scraped = scrape_post_url(url)
+                content = scraped if scraped else result.text
+            else:
+                content = result.text
+            formatted_sources.append(f"[Source {result.rank}]\n{content}")
         return "\n\n".join(formatted_sources)
 
 
