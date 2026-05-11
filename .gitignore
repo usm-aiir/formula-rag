@@ -15,6 +15,10 @@ pip-wheel-metadata/
 venv/
 env/
 ENV/
+**/.venv/
+**/venv/
+**/env/
+**/ENV/
 .env
 
 .ipynb_checkpoints/
@@ -56,9 +60,18 @@ Thumbs.db
 htmlcov/
 .tox/
 
-results/
-tri-search/arq1thru3-finetuned-all-mpnet-jul-27
-tri-search/data/clip_index/metadata.json
+service-clip/.clipvenv/
+service-clip/data/clip_index/
+service-clip/data/llm2clip_index/
+service-clip/data/longclip_index/
+service-clip/checkpoints/
+
+service-text/arq1thru3-finetuned-all-mpnet-jul-27/
+service-formula/checkpoints/
+service-formula/data/processed/*
+!service-formula/data/processed/**/.gitkeep
+
+data/clip_index/metadata.json
 tri-search/MathImages
 src/task3/misc/
 src/data/raw/arqmath/formulas/latex_representation_v3

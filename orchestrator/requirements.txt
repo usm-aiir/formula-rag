@@ -1,0 +1,12 @@
+# PC1 orchestrator dependencies
+# Run: pip install -r requirements.txt
+
+torch
+transformers
+peft
+huggingface_hub
+requests
+python-dotenv
+streamlit
+beautifulsoup4
+lxml
